@@ -148,9 +148,9 @@ export default function PhieuGiaoHangDetail() {
           key: crypto.randomUUID(),
           id: ct.id,
           hop_dong_chi_tiet_id: (ct as any).hop_dong_chi_tiet_id || undefined,
-          ten_san_pham: ct.ten_san_pham,
-          don_vi: ct.don_vi,
-          so_luong_giao: ct.so_luong_giao,
+          ten_san_pham: ct.ten_san_pham || '',
+          don_vi: ct.don_vi || '',
+          so_luong_giao: ct.so_luong_giao || 0,
           ghi_chu: ct.ghi_chu || '',
         }))
       : [makeEmptyLineItem()];
