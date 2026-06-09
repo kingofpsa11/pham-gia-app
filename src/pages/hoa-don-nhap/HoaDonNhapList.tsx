@@ -109,8 +109,6 @@ export default function HoaDonNhapList() {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [form, setForm] = useState<FormValues>(emptyForm);
   const [saving, setSaving] = useState(false);
-  // Original chi_tiet quantities for editing (to compute ton_kho diff)
-  const [originalChiTiet, setOriginalChiTiet] = useState<HoaDonNhapChiTiet[]>([]);
 
   // ─── Delete confirm ───────────────────────────────────────────────────────
   const [deleteTarget, setDeleteTarget] = useState<HoaDonNhap | null>(null);
@@ -197,24 +195,9 @@ export default function HoaDonNhapList() {
     }));
   }
 
-  // ─── Update vat_tu.ton_kho for a given vat_tu_id ──────────────────────────
-  async function updateTonKho(vatTuId: number, delta: number) {
-    if (delta === 0) return;
-
-    // Fetch current ton_kho
-    const { data: allVatTu } = await vatTuApi.list({ limit: 99999 });
-    const vt = (allVatTu || []).find((v) => v.id === vatTuId);
-
-    const currentTonKho = vt?.ton_kho ?? 0;
-    const newTonKho = Math.max(0, currentTonKho + delta);
-
-    await vatTuApi.update(vatTuId, { ton_kho: newTonKho });
-  }
-
   // ─── Modal handlers ──────────────────────────────────────────────────────
   function openAddModal() {
     setEditingId(null);
-    setOriginalChiTiet([]);
     setForm({ ...emptyForm, so_hoa_don: generateSoHoaDonNhap() });
     setModalOpen(true);
   }
@@ -226,7 +209,6 @@ export default function HoaDonNhapList() {
     // Fetch existing chi_tiet for this hoa_don_nhap
     const { data: hdnDetail } = await hoaDonNhapApi.get(hdn.id);
     const ctList = ((hdnDetail as any).chi_tiet as HoaDonNhapChiTiet[]) || [];
-    setOriginalChiTiet(ctList);
 
     setForm({
       so_hoa_don: hdn.so_hoa_don,
@@ -288,16 +270,6 @@ export default function HoaDonNhapList() {
           })),
         });
 
-        // ─── Subtract old quantities from ton_kho ──────────────────────────
-        for (const oldCt of originalChiTiet) {
-          await updateTonKho(oldCt.vat_tu_id, -oldCt.so_luong);
-        }
-
-        // ─── Add new quantities to ton_kho ─────────────────────────────────
-        for (const ct of validItems) {
-          await updateTonKho(Number(ct.vat_tu_id), Number(ct.so_luong));
-        }
-
         addToast('success', 'Cập nhật hóa đơn nhập thành công');
       } else {
         // ─── Insert hoa_don_nhap ────────────────────────────────────────────
@@ -315,11 +287,6 @@ export default function HoaDonNhapList() {
             thanh_tien: ct.thanh_tien,
           })),
         });
-
-        // ─── Update ton_kho: add so_luong for each line item ───────────────
-        for (const ct of validItems) {
-          await updateTonKho(Number(ct.vat_tu_id), Number(ct.so_luong));
-        }
 
         addToast('success', 'Tạo hóa đơn nhập thành công');
       }
@@ -343,17 +310,6 @@ export default function HoaDonNhapList() {
   async function handleDelete() {
     if (!deleteTarget) return;
     try {
-      // Fetch chi_tiet to subtract quantities from ton_kho
-      const { data: hdnDetail } = await hoaDonNhapApi.get(deleteTarget.id);
-      const chiTietData = ((hdnDetail as any).chi_tiet || []) as { vat_tu_id: number; so_luong: number }[];
-
-      // Subtract quantities from ton_kho
-      if (chiTietData) {
-        for (const ct of chiTietData) {
-          await updateTonKho(ct.vat_tu_id, -(ct.so_luong));
-        }
-      }
-
       await hoaDonNhapApi.delete(deleteTarget.id);
 
       addToast('success', 'Xóa hóa đơn nhập thành công');

@@ -106,7 +106,17 @@ export default function HopDongDetail() {
     if (!hopDong) return;
     setChangingStatus(true);
     try {
-      await hopDongApi.update(hopDong.id, { trang_thai: newStatus });
+      await hopDongApi.update(hopDong.id, {
+        khach_hang_id: hopDong.khach_hang_id,
+        ten_du_an: hopDong.ten_du_an || '',
+        so_hop_dong: hopDong.so_hop_dong,
+        ngay_hop_dong: hopDong.ngay_hop_dong,
+        file_hop_dong_id: hopDong.file_hop_dong_id || '',
+        mo_ta_noi_dung: hopDong.mo_ta_noi_dung || '',
+        trang_thai: newStatus,
+        phi_van_chuyen: hopDong.phi_van_chuyen || 0,
+        che_do_van_chuyen: hopDong.che_do_van_chuyen || 0,
+      });
 
       addToast('success', `Đổi trạng thái hợp đồng thành ${trangThaiHopDongLabel(newStatus)}`);
       setShowThanhLy(false);
