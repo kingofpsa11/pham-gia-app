@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import type { ReactNode } from 'react';
 import { supabase } from '../../lib/supabase';
 import { useAuthStore } from '../../store/auth';
 import { useToastStore } from '../../store/toast';
@@ -66,15 +67,6 @@ function TemplateUploadCard({ configKey, label }: { configKey: string; label: st
   }, [configKey]);
 
   useEffect(() => { fetchMeta(); }, [fetchMeta]);
-
-  async function ensureBucket() {
-    const { data: buckets } = await supabase.storage.listBuckets();
-    const exists = buckets?.some((b) => b.name === BUCKET);
-    if (!exists) {
-      const { error } = await supabase.storage.createBucket(BUCKET, { public: true });
-      if (error && !error.message.toLowerCase().includes('already exist')) throw error;
-    }
-  }
 
   async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -697,7 +689,7 @@ function HangMucThuChiSection() {
     } catch { addToast('error', 'Không thể xóa hạng mục'); }
   }
 
-  function renderRow(item: HangMucThuChi, depth: number) {
+  function renderRow(item: HangMucThuChi, depth: number): ReactNode {
     const children = getChildren(item.id);
     return (
       <>
