@@ -1,17 +1,22 @@
 import { useState, useEffect } from 'react';
-import { hopDongApi, phieuGiaoHangApi, dongTienApi, tepDinhKemApi } from '../../lib/api';
+import { hopDongApi, phieuGiaoHangApi, dongTienMoiApi, tepDinhKemApi } from '../../lib/api';
 import { useToastStore } from '../../store/toast';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   formatVND,
   formatDate,
+  formatDateTime,
   formatNumber,
   formatPercent,
   cheDoVanChuyenLabel,
+  calcLoiNhuanGop,
+  applyVanChuyenToChiTiet,
+  giaBanThuanChoLoiNhuan,
   trangThaiHopDongLabel,
   trangThaiHopDongColor,
 } from '../../lib/utils';
 import ConfirmDialog from '../../components/ui/ConfirmDialog';
+import LoiNhuanGopSummary from '../../components/shared/LoiNhuanGopSummary';
 import HopDongForm from './HopDongForm';
 import {
   ArrowLeft,
@@ -21,15 +26,34 @@ import {
   CreditCard,
   AlertTriangle,
   Package,
+  FileText,
+  Wallet,
+  TrendingUp,
+  TrendingDown,
 } from 'lucide-react';
+
+type TabKey = 'chi-tiet' | 'tai-chinh';
+import { giaTriGhiNoPhieu } from '../../lib/phieuGiaoHangTotals';
 import type {
   HopDong,
   HopDongChiTiet,
   KhachHang,
   PhieuGiaoHang,
-  DongTien,
+  DongTienMoi,
   TepDinhKem,
 } from '../../types';
+
+function isDongTienThu(dt: DongTienMoi): boolean {
+  if (dt.loai_giao_dich === 'thu') return true;
+  if (dt.loai_giao_dich === 'chuyen_khoan_noi_bo' && dt.chieu_tien === 'thu') return true;
+  return false;
+}
+
+function isDongTienChi(dt: DongTienMoi): boolean {
+  if (dt.loai_giao_dich === 'chi') return true;
+  if (dt.loai_giao_dich === 'chuyen_khoan_noi_bo' && dt.chieu_tien === 'chi') return true;
+  return false;
+}
 
 interface HopDongFull extends HopDong {
   khach_hang?: KhachHang;
@@ -44,11 +68,12 @@ export default function HopDongDetail() {
   const [hopDong, setHopDong] = useState<HopDongFull | null>(null);
   const [chiTiet, setChiTiet] = useState<HopDongChiTiet[]>([]);
   const [phieuGiaoList, setPhieuGiaoList] = useState<PhieuGiaoHang[]>([]);
-  const [dongTienList, setDongTienList] = useState<DongTien[]>([]);
+  const [dongTienList, setDongTienList] = useState<DongTienMoi[]>([]);
   const [fileList, setFileList] = useState<TepDinhKem[]>([]);
   const [congNo, setCongNo] = useState(0);
   const [loading, setLoading] = useState(true);
   const [isEditing, setIsEditing] = useState(false);
+  const [activeTab, setActiveTab] = useState<TabKey>('chi-tiet');
 
   // Status change dialogs
   const [showThanhLy, setShowThanhLy] = useState(false);
@@ -64,13 +89,7 @@ export default function HopDongDetail() {
     try {
       const hdId = Number(id);
 
-      const [hdRes, pghRes, dtRes, fileRes] = await Promise.all([
-        hopDongApi.get(hdId),
-        phieuGiaoHangApi.byHopDong(hdId),
-        dongTienApi.byEntity({ hop_dong_id: String(hdId) }),
-        tepDinhKemApi.list('hop_dong', hdId),
-      ]);
-
+      const hdRes = await hopDongApi.get(hdId);
       const hdData = hdRes.data;
       if (!hdData) {
         addToast('error', 'Không tìm thấy hợp đồng');
@@ -78,21 +97,46 @@ export default function HopDongDetail() {
         return;
       }
 
-      setHopDong(hdData as HopDongFull);
-      setChiTiet((hdData as any).chi_tiet || []);
-      setPhieuGiaoList((pghRes.data as PhieuGiaoHang[]) || []);
-      setDongTienList((dtRes.data as DongTien[]) || []);
-      setFileList((fileRes.data as TepDinhKem[]) || []);
+      const hd = hdData as HopDongFull & { ten_cong_ty?: string };
+      setHopDong({
+        ...hd,
+        khach_hang: hd.khach_hang ?? (hd.ten_cong_ty ? { ten_cong_ty: hd.ten_cong_ty } as KhachHang : undefined),
+      });
+      setChiTiet(hd.chi_tiet || []);
 
-      // Calculate cong no: total gia_tri_ghi_no from phieu_giao_hang minus total ghi_no from dong_tien
-      const tongGhiNo = ((pghRes.data as PhieuGiaoHang[]) || []).reduce(
-        (sum, pgh) => sum + (pgh.gia_tri_ghi_no || 0),
-        0
-      );
-      const tongDaThu = ((dtRes.data as DongTien[]) || []).reduce(
-        (sum, dt) => sum + (dt.ghi_no || 0),
-        0
-      );
+      let pghRows: PhieuGiaoHang[] = [];
+      let dtRows: DongTienMoi[] = [];
+      let files: TepDinhKem[] = [];
+
+      try {
+        const pghRes = await phieuGiaoHangApi.byHopDong(hdId);
+        pghRows = (pghRes.data as PhieuGiaoHang[]) || [];
+      } catch (e) {
+        console.error('Loi tai phieu giao hang:', e);
+      }
+
+      try {
+        const dtRes = await dongTienMoiApi.list({ hop_dong_id: String(hdId), limit: 9999 });
+        dtRows = (dtRes.data as DongTienMoi[]) || [];
+      } catch (e) {
+        console.error('Loi tai dong tien:', e);
+      }
+
+      try {
+        const fileRes = await tepDinhKemApi.list('hop_dong', hdId);
+        files = (fileRes.data as TepDinhKem[]) || [];
+      } catch (e) {
+        console.error('Loi tai tep dinh kem:', e);
+      }
+
+      setPhieuGiaoList(pghRows);
+      setDongTienList(dtRows);
+      setFileList(files);
+
+      const tongGhiNo = pghRows.reduce((sum, pgh) => sum + giaTriGhiNoPhieu(pgh), 0);
+      const tongDaThu = dtRows
+        .filter(isDongTienThu)
+        .reduce((sum, dt) => sum + (Number(dt.so_tien) || 0), 0);
       setCongNo(tongGhiNo - tongDaThu);
     } catch (err) {
       console.error('Loi tai hop dong:', err);
@@ -106,7 +150,7 @@ export default function HopDongDetail() {
     if (!hopDong) return;
     setChangingStatus(true);
     try {
-      await hopDongApi.update(hopDong.id, { trang_thai: newStatus });
+      await hopDongApi.updateStatus(hopDong.id, newStatus);
 
       addToast('success', `Đổi trạng thái hợp đồng thành ${trangThaiHopDongLabel(newStatus)}`);
       setShowThanhLy(false);
@@ -153,11 +197,36 @@ export default function HopDongDetail() {
   const phiVC = Number(hopDong.phi_van_chuyen || 0);
   // Mode=0 (Riêng): cộng phí VC vào tổng; mode=1/2: VC đã tính vào giá bán/giá vốn
   const tongThanhToan = tongTruocVAT + tongVAT + (cheDoVC === 0 ? phiVC : 0);
-  // Lãi gộp: doanh thu trước VAT trừ giá vốn + VC (nếu mode=1/2)
-  const tongGiaVon = chiTiet.reduce((sum, ct) => sum + Number(ct.so_luong || 0) * Number(ct.don_gia_von || 0), 0)
-    + (cheDoVC !== 0 ? phiVC : 0);
-  const loiNhuanGop = tongTruocVAT - tongGiaVon;
-  const tyLeLoiNhuan = tongTruocVAT > 0 ? Math.round((loiNhuanGop / tongTruocVAT) * 100) : 0;
+  const tongGiaVonThuan = chiTiet.reduce(
+    (sum, ct) => sum + Number(ct.so_luong || 0) * Number(ct.don_gia_von || 0),
+    0
+  );
+  const withVCChiTiet = applyVanChuyenToChiTiet(
+    chiTiet.map((ct) => ({
+      ...ct,
+      gia_ban_chua_van_chuyen:
+        Number((ct as { gia_ban_chua_van_chuyen?: number }).gia_ban_chua_van_chuyen) ||
+        Number(ct.gia_ban_thuc_te) ||
+        0,
+    })),
+    cheDoVC,
+    phiVC
+  );
+  const profitRows = withVCChiTiet.map((ct) => ({
+    so_luong: ct.so_luong,
+    gia_ban_thuc_te: giaBanThuanChoLoiNhuan(ct, cheDoVC),
+    don_gia_von: ct.don_gia_von,
+  }));
+  const loiNhuanGop = calcLoiNhuanGop(profitRows, cheDoVC, phiVC);
+  const tyLeLoiNhuan =
+    tongTruocVAT > 0 ? Math.round((loiNhuanGop / tongTruocVAT) * 100) : 0;
+
+  const thuDongTien = dongTienList.filter(isDongTienThu);
+  const chiDongTien = dongTienList.filter(isDongTienChi);
+  const tongThuThucTe = thuDongTien.reduce((s, dt) => s + (Number(dt.so_tien) || 0), 0);
+  const tongChiPhi = chiDongTien.reduce((s, dt) => s + (Number(dt.so_tien) || 0), 0);
+  const loiThucTe = tongThuThucTe - tongChiPhi;
+  const tongGhiNoPGH = phieuGiaoList.reduce((s, pgh) => s + giaTriGhiNoPhieu(pgh), 0);
 
   const canChangeStatus = hopDong.trang_thai === 'Hieu luc';
 
@@ -194,96 +263,127 @@ export default function HopDongDetail() {
     );
   }
 
+  const khachHangTen =
+    hopDong.khach_hang?.ten_cong_ty || (hopDong as HopDongFull & { ten_cong_ty?: string }).ten_cong_ty || '';
+
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center gap-4">
+    <div className="space-y-4">
+      <div className="flex items-start gap-4">
         <button
           onClick={() => navigate('/hop-dong')}
-          className="p-2 rounded-lg text-gray-500 hover:bg-gray-100 transition-colors"
+          className="p-2 rounded-lg text-gray-500 hover:bg-gray-100 transition-colors shrink-0"
           title="Quay lại"
         >
           <ArrowLeft className="w-5 h-5" />
         </button>
-        <div className="flex-1 min-w-0">
-          <h1 className="text-2xl font-bold text-gray-900 truncate">{hopDong.so_hop_dong}</h1>
-          <p className="mt-0.5 text-sm text-gray-500 truncate">
-            {hopDong.khach_hang?.ten_cong_ty}
-            {hopDong.ten_du_an ? ` - ${hopDong.ten_du_an}` : ''}
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => setIsEditing(true)}
-            className="btn-primary flex items-center gap-2"
-          >
-            <Pencil className="w-4 h-4" />
-            Chỉnh sửa
-          </button>
-          {canChangeStatus && (
-            <>
+        <div className="flex-1 min-w-0 space-y-3">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div className="min-w-0">
+              <h1 className="text-2xl font-bold text-gray-900 truncate">
+                {hopDong.so_hop_dong || `Hợp đồng #${hopDong.id}`}
+              </h1>
+              <p className="mt-0.5 text-sm text-gray-500 truncate">
+                {[khachHangTen, hopDong.ten_du_an].filter(Boolean).join(' — ') || 'Chưa có thông tin khách hàng / dự án'}
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
               <button
-                onClick={() => setShowThanhLy(true)}
-                className="btn-secondary flex items-center gap-2"
+                onClick={() => setIsEditing(true)}
+                className="btn-primary flex items-center gap-2"
               >
-                Thanh lý
+                <Pencil className="w-4 h-4" />
+                Chỉnh sửa
               </button>
-              <button
-                onClick={() => setShowHuy(true)}
-                className="btn-secondary text-red-600 hover:bg-red-50 flex items-center gap-2"
-              >
-                Hủy
-              </button>
-            </>
-          )}
-        </div>
-      </div>
-
-      {/* Thong tin hop dong */}
-      <div className="card">
-        <div className="card-header">
-          <h2 className="text-lg font-semibold text-gray-900">Thông tin hợp đồng</h2>
-        </div>
-        <div className="card-body">
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-            <div>
-              <p className="text-xs font-medium text-gray-500">Số hợp đồng</p>
-              <p className="text-sm font-semibold text-gray-900">{hopDong.so_hop_dong}</p>
+              {canChangeStatus && (
+                <>
+                  <button
+                    onClick={() => setShowThanhLy(true)}
+                    className="btn-secondary flex items-center gap-2"
+                  >
+                    Thanh lý
+                  </button>
+                  <button
+                    onClick={() => setShowHuy(true)}
+                    className="btn-secondary text-red-600 hover:bg-red-50 flex items-center gap-2"
+                  >
+                    Hủy
+                  </button>
+                </>
+              )}
             </div>
-            <div>
-              <p className="text-xs font-medium text-gray-500">Ngày hợp đồng</p>
-              <p className="text-sm font-semibold text-gray-900">{formatDate(hopDong.ngay_hop_dong)}</p>
-            </div>
-            <div>
-              <p className="text-xs font-medium text-gray-500">Khách hàng</p>
-              <p className="text-sm font-semibold text-gray-900">{hopDong.khach_hang?.ten_cong_ty || '--'}</p>
-            </div>
-            <div>
-              <p className="text-xs font-medium text-gray-500">Dự án</p>
-              <p className="text-sm font-semibold text-gray-900">{hopDong.ten_du_an || '--'}</p>
-            </div>
-            <div>
-              <p className="text-xs font-medium text-gray-500">Trạng thái</p>
-              <span className={trangThaiHopDongColor(hopDong.trang_thai)}>
-                {trangThaiHopDongLabel(hopDong.trang_thai)}
-              </span>
-            </div>
-            <div>
-              <p className="text-xs font-medium text-gray-500">Chế độ vận chuyển</p>
-              <p className="text-sm font-semibold text-gray-900">{cheDoVanChuyenLabel(hopDong.che_do_van_chuyen)}</p>
-            </div>
-            <div>
-              <p className="text-xs font-medium text-gray-500">Phí vận chuyển</p>
-              <p className="text-sm font-semibold text-gray-900">{formatVND(hopDong.phi_van_chuyen)}</p>
-            </div>
-            <div className="sm:col-span-2">
-              <p className="text-xs font-medium text-gray-500">Mô tả nội dung</p>
-              <p className="text-sm font-semibold text-gray-900">{hopDong.mo_ta_noi_dung || '--'}</p>
+          </div>
+          <div className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              <div>
+                <p className="text-xs font-medium text-gray-500">Số hợp đồng</p>
+                <p className="text-sm font-semibold text-gray-900">{hopDong.so_hop_dong || '--'}</p>
+              </div>
+              <div>
+                <p className="text-xs font-medium text-gray-500">Khách hàng</p>
+                <p className="text-sm font-semibold text-gray-900">{khachHangTen || '--'}</p>
+              </div>
+              <div>
+                <p className="text-xs font-medium text-gray-500">Dự án</p>
+                <p className="text-sm font-semibold text-gray-900">{hopDong.ten_du_an || '--'}</p>
+              </div>
+              <div>
+                <p className="text-xs font-medium text-gray-500">Ngày hợp đồng</p>
+                <p className="text-sm font-semibold text-gray-900">{formatDate(hopDong.ngay_hop_dong) || '--'}</p>
+              </div>
+              <div>
+                <p className="text-xs font-medium text-gray-500 mb-1.5">Trạng thái</p>
+                <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-semibold ${trangThaiHopDongColor(hopDong.trang_thai)}`}>
+                  {trangThaiHopDongLabel(hopDong.trang_thai)}
+                </span>
+              </div>
+              <div>
+                <p className="text-xs font-medium text-gray-500">Chế độ VC</p>
+                <p className="text-sm font-semibold text-gray-900">{cheDoVanChuyenLabel(hopDong.che_do_van_chuyen)}</p>
+              </div>
+              <div>
+                <p className="text-xs font-medium text-gray-500">Phí VC</p>
+                <p className="text-sm font-semibold text-gray-900">{formatVND(hopDong.phi_van_chuyen)}</p>
+              </div>
+              <div className="sm:col-span-2 lg:col-span-1">
+                <p className="text-xs font-medium text-gray-500">Mô tả</p>
+                <p className="text-sm font-semibold text-gray-900">{hopDong.mo_ta_noi_dung || '--'}</p>
+              </div>
             </div>
           </div>
         </div>
       </div>
 
+      <div className="border-b border-gray-200">
+        <nav className="flex gap-0 overflow-x-auto" aria-label="Tabs">
+          <button
+            type="button"
+            onClick={() => setActiveTab('chi-tiet')}
+            className={`flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 whitespace-nowrap transition-colors ${
+              activeTab === 'chi-tiet'
+                ? 'border-primary-600 text-primary-600'
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+            }`}
+          >
+            <FileText className="w-4 h-4" />
+            Nội dung hợp đồng
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('tai-chinh')}
+            className={`flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 whitespace-nowrap transition-colors ${
+              activeTab === 'tai-chinh'
+                ? 'border-primary-600 text-primary-600'
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+            }`}
+          >
+            <Wallet className="w-4 h-4" />
+            Dòng tiền & công nợ
+          </button>
+        </nav>
+      </div>
+
+      {activeTab === 'chi-tiet' && (
+      <>
       {/* Chi tiet hop dong */}
       <div className="card">
         <div className="card-header">
@@ -354,33 +454,13 @@ export default function HopDongDetail() {
         </div>
         <div className="card-body">
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* Lãi gộp */}
-            <div className="rounded-xl p-4 bg-green-50 border border-green-200">
-              <div className="flex items-center justify-between mb-3">
-                <span className="text-xs font-bold text-green-800 uppercase tracking-wide">Lãi gộp hợp đồng</span>
-                <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${tyLeLoiNhuan >= 0 ? 'bg-green-200 text-green-800' : 'bg-red-200 text-red-800'}`}>
-                  {tyLeLoiNhuan}%
-                </span>
-              </div>
-              <div className="text-sm text-gray-600 space-y-1.5 mb-3">
-                <div className="flex justify-between">
-                  <span>Doanh thu (trước VAT):</span>
-                  <span className="font-medium text-gray-900">{formatVND(tongTruocVAT)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>
-                    Tổng giá vốn
-                    {cheDoVC === 1 && <span className="text-xs text-orange-500 ml-1">(+VC phân bổ)</span>}
-                    {cheDoVC === 2 && <span className="text-xs text-orange-500 ml-1">(+VC hỗ trợ)</span>}
-                    :
-                  </span>
-                  <span className="font-medium text-red-600">{formatVND(tongGiaVon)}</span>
-                </div>
-              </div>
-              <div className={`text-2xl font-bold ${loiNhuanGop >= 0 ? 'text-green-700' : 'text-red-600'}`}>
-                {formatVND(loiNhuanGop)}
-              </div>
-            </div>
+            <LoiNhuanGopSummary
+              tongGiaVonChuaVc={tongGiaVonThuan}
+              phiVanChuyen={phiVC}
+              giaBanChuaThue={tongTruocVAT}
+              loiNhuan={loiNhuanGop}
+              tyLeLai={tyLeLoiNhuan}
+            />
 
             {/* Tổng thanh toán */}
             <div className="rounded-xl p-4 bg-white border border-gray-200">
@@ -401,12 +481,6 @@ export default function HopDongDetail() {
                     <span className="font-semibold text-red-500">{formatVND(vat10)}</span>
                   </div>
                 )}
-                {cheDoVC === 0 && phiVC > 0 && (
-                  <div className="flex items-center justify-between">
-                    <span className="text-gray-500">Phí vận chuyển (riêng)</span>
-                    <span className="font-semibold text-gray-900">{formatVND(phiVC)}</span>
-                  </div>
-                )}
                 <div className="border-t border-gray-200 pt-2 mt-1">
                   <div className="flex items-center justify-between">
                     <span className="text-base font-semibold text-gray-900">Tổng thanh toán</span>
@@ -415,104 +489,6 @@ export default function HopDongDetail() {
                 </div>
               </div>
             </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Phieu giao hang */}
-      <div className="card">
-        <div className="card-header">
-          <h2 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
-            <Package className="w-5 h-5 text-primary-600" />
-            Phiếu giao hàng
-          </h2>
-        </div>
-        <div className="card-body p-0">
-          {phieuGiaoList.length === 0 ? (
-            <p className="px-6 py-4 text-sm text-gray-500">Chưa có phiếu giao hàng nào</p>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead>
-                  <tr>
-                    <th className="table-header">Số phiếu</th>
-                    <th className="table-header">Ngày giao</th>
-                    <th className="table-header">Nội dung</th>
-                    <th className="table-header text-right">Giá trị ghi nợ</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-200">
-                  {phieuGiaoList.map((pgh) => (
-                    <tr
-                      key={pgh.id}
-                      className="hover:bg-gray-50 transition-colors cursor-pointer"
-                      onClick={() => navigate(`/phieu-giao-hang/${pgh.id}`)}
-                    >
-                      <td className="table-cell font-medium text-gray-900">{pgh.so_phieu}</td>
-                      <td className="table-cell text-gray-500">{formatDate(pgh.ngay_giao)}</td>
-                      <td className="table-cell text-gray-700">{pgh.noi_dung || '--'}</td>
-                      <td className="table-cell text-right font-semibold text-gray-900">{formatVND(pgh.gia_tri_ghi_no)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* Dong tien */}
-      <div className="card">
-        <div className="card-header">
-          <h2 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
-            <CreditCard className="w-5 h-5 text-primary-600" />
-            Dòng tiền
-          </h2>
-        </div>
-        <div className="card-body p-0">
-          {dongTienList.length === 0 ? (
-            <p className="px-6 py-4 text-sm text-gray-500">Chưa có dòng tiền nào</p>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead>
-                  <tr>
-                    <th className="table-header">Ngày thực hiện</th>
-                    <th className="table-header">Mô tả giao dịch</th>
-                    <th className="table-header text-right">Ghi nợ</th>
-                    <th className="table-header text-right">Ghi có</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-200">
-                  {dongTienList.map((dt) => (
-                    <tr key={dt.id} className="hover:bg-gray-50 transition-colors">
-                      <td className="table-cell text-gray-500">{formatDate(dt.ngay_gio_giao_dich)}</td>
-                      <td className="table-cell text-gray-700">{dt.mo_ta_giao_dich || '--'}</td>
-                      <td className="table-cell text-right font-semibold text-gray-900">{formatVND(dt.ghi_no)}</td>
-                      <td className="table-cell text-right font-semibold text-gray-900">{formatVND(dt.ghi_co)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* Cong no con lai */}
-      <div className="card">
-        <div className="card-header">
-          <h2 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
-            <AlertTriangle className="w-5 h-5 text-amber-500" />
-            Công nợ còn lại
-          </h2>
-        </div>
-        <div className="card-body">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm text-gray-500">Tổng giá trị ghi nợ từ phiếu giao hàng trừ đi dòng tiền đã thu</p>
-            </div>
-            <span className="text-xl font-bold text-amber-600">{formatVND(congNo)}</span>
           </div>
         </div>
       </div>
@@ -563,6 +539,220 @@ export default function HopDongDetail() {
           )}
         </div>
       </div>
+      </>
+      )}
+
+      {activeTab === 'tai-chinh' && (
+      <div className="space-y-6">
+        {/* Tổng quan tài chính */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div className="card p-4">
+            <p className="text-xs font-medium text-gray-500 mb-1">Đã thu (dòng tiền)</p>
+            <p className="text-xl font-bold text-green-600">{formatVND(tongThuThucTe)}</p>
+            <p className="text-xs text-gray-400 mt-1">{thuDongTien.length} giao dịch thu</p>
+          </div>
+          <div className="card p-4">
+            <p className="text-xs font-medium text-gray-500 mb-1">Chi phí thực tế</p>
+            <p className="text-xl font-bold text-red-600">{formatVND(tongChiPhi)}</p>
+            <p className="text-xs text-gray-400 mt-1">{chiDongTien.length} giao dịch chi</p>
+          </div>
+          <div className="card p-4">
+            <p className="text-xs font-medium text-gray-500 mb-1">Lãi thực tế</p>
+            <p className={`text-xl font-bold flex items-center gap-1.5 ${loiThucTe >= 0 ? 'text-green-700' : 'text-red-600'}`}>
+              {loiThucTe >= 0 ? <TrendingUp className="w-5 h-5" /> : <TrendingDown className="w-5 h-5" />}
+              {formatVND(loiThucTe)}
+            </p>
+            <p className="text-xs text-gray-400 mt-1">
+              = Thu − Chi (Kế hoạch: {formatVND(loiNhuanGop)})
+            </p>
+          </div>
+          <div className="card p-4">
+            <p className="text-xs font-medium text-gray-500 mb-1">Ghi nợ PGH (sau VAT)</p>
+            <p className="text-xl font-bold text-gray-900">{formatVND(tongGhiNoPGH)}</p>
+          </div>
+          <div className="card p-4">
+            <p className="text-xs font-medium text-gray-500 mb-1">Công nợ còn lại</p>
+            <p className={`text-xl font-bold ${congNo > 0 ? 'text-amber-600' : 'text-green-600'}`}>
+              {formatVND(congNo)}
+            </p>
+            <p className="text-xs text-gray-400 mt-1">Ghi nợ PGH − Đã thu</p>
+          </div>
+          <div className="card p-4">
+            <p className="text-xs font-medium text-gray-500 mb-1">Giá trị hợp đồng</p>
+            <p className="text-xl font-bold text-primary-600">{formatVND(tongThanhToan)}</p>
+          </div>
+        </div>
+
+        <div className="card">
+          <div className="card-header">
+            <h2 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+              <Package className="w-5 h-5 text-primary-600" />
+              Phiếu giao hàng
+            </h2>
+          </div>
+          <div className="card-body p-0">
+            {phieuGiaoList.length === 0 ? (
+              <p className="px-6 py-4 text-sm text-gray-500">Chưa có phiếu giao hàng nào</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead>
+                    <tr>
+                      <th className="table-header">Số phiếu</th>
+                      <th className="table-header">Ngày giao</th>
+                      <th className="table-header">Nội dung</th>
+                      <th className="table-header text-right">Ghi nợ (sau VAT)</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-200">
+                    {phieuGiaoList.map((pgh) => (
+                      <tr
+                        key={pgh.id}
+                        className="hover:bg-gray-50 transition-colors cursor-pointer"
+                        onClick={() => navigate(`/phieu-giao-hang/${pgh.id}`)}
+                      >
+                        <td className="table-cell font-medium text-gray-900">{pgh.so_phieu}</td>
+                        <td className="table-cell text-gray-500">{formatDate(pgh.ngay_giao)}</td>
+                        <td className="table-cell text-gray-700">{pgh.noi_dung || '--'}</td>
+                        <td className="table-cell text-right font-semibold text-gray-900">{formatVND(giaTriGhiNoPhieu(pgh))}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="card">
+          <div className="card-header">
+            <h2 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+              <CreditCard className="w-5 h-5 text-green-600" />
+              Dòng tiền thu
+            </h2>
+          </div>
+          <div className="card-body p-0">
+            {thuDongTien.length === 0 ? (
+              <p className="px-6 py-4 text-sm text-gray-500">Chưa có dòng tiền thu nào gắn hợp đồng này</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead>
+                    <tr>
+                      <th className="table-header">Ngày GD</th>
+                      <th className="table-header">Mô tả</th>
+                      <th className="table-header">Hạng mục</th>
+                      <th className="table-header">Tài khoản</th>
+                      <th className="table-header text-right">Số tiền</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-200">
+                    {thuDongTien.map((dt) => (
+                      <tr key={dt.id} className="hover:bg-gray-50 transition-colors">
+                        <td className="table-cell text-gray-500 whitespace-nowrap">{formatDateTime(dt.ngay_giao_dich)}</td>
+                        <td className="table-cell text-gray-700">{dt.mo_ta_giao_dich || '--'}</td>
+                        <td className="table-cell text-gray-500">{dt.ten_hang_muc || '--'}</td>
+                        <td className="table-cell text-gray-700">{dt.ten_tai_khoan || '--'}</td>
+                        <td className="table-cell text-right font-semibold text-green-600 whitespace-nowrap">
+                          {formatVND(dt.so_tien)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    <tr className="bg-green-50">
+                      <td colSpan={4} className="table-cell text-right font-semibold text-gray-700">Tổng thu</td>
+                      <td className="table-cell text-right font-bold text-green-700">{formatVND(tongThuThucTe)}</td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="card">
+          <div className="card-header">
+            <h2 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+              <TrendingDown className="w-5 h-5 text-red-500" />
+              Chi phí
+            </h2>
+          </div>
+          <div className="card-body p-0">
+            {chiDongTien.length === 0 ? (
+              <p className="px-6 py-4 text-sm text-gray-500">Chưa có chi phí nào gắn hợp đồng này</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead>
+                    <tr>
+                      <th className="table-header">Ngày GD</th>
+                      <th className="table-header">Mô tả</th>
+                      <th className="table-header">Hạng mục</th>
+                      <th className="table-header">Tài khoản</th>
+                      <th className="table-header text-right">Số tiền</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-200">
+                    {chiDongTien.map((dt) => (
+                      <tr key={dt.id} className="hover:bg-gray-50 transition-colors">
+                        <td className="table-cell text-gray-500 whitespace-nowrap">{formatDateTime(dt.ngay_giao_dich)}</td>
+                        <td className="table-cell text-gray-700">{dt.mo_ta_giao_dich || '--'}</td>
+                        <td className="table-cell text-gray-500">{dt.ten_hang_muc || '--'}</td>
+                        <td className="table-cell text-gray-700">{dt.ten_tai_khoan || '--'}</td>
+                        <td className="table-cell text-right font-semibold text-red-600 whitespace-nowrap">
+                          {formatVND(dt.so_tien)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    <tr className="bg-red-50">
+                      <td colSpan={4} className="table-cell text-right font-semibold text-gray-700">Tổng chi phí</td>
+                      <td className="table-cell text-right font-bold text-red-700">{formatVND(tongChiPhi)}</td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="card border-amber-200">
+          <div className="card-header">
+            <h2 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+              <AlertTriangle className="w-5 h-5 text-amber-500" />
+              Công nợ & lãi thực tế
+            </h2>
+          </div>
+          <div className="card-body space-y-3">
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-gray-600">Ghi nợ PGH (sau VAT)</span>
+              <span className="font-semibold text-gray-900">{formatVND(tongGhiNoPGH)}</span>
+            </div>
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-gray-600">Đã thu (dòng tiền)</span>
+              <span className="font-semibold text-green-600">− {formatVND(tongThuThucTe)}</span>
+            </div>
+            <div className="border-t border-gray-200 pt-3 flex items-center justify-between">
+              <span className="font-semibold text-gray-800">Công nợ còn lại</span>
+              <span className={`text-xl font-bold ${congNo > 0 ? 'text-amber-600' : 'text-green-600'}`}>
+                {formatVND(congNo)}
+              </span>
+            </div>
+            <div className="border-t border-gray-200 pt-3 flex items-center justify-between">
+              <div>
+                <p className="font-semibold text-gray-800">Lãi thực tế</p>
+                <p className="text-xs text-gray-500">Tổng thu − Tổng chi phí (từ dòng tiền Excel)</p>
+              </div>
+              <span className={`text-xl font-bold ${loiThucTe >= 0 ? 'text-green-700' : 'text-red-600'}`}>
+                {formatVND(loiThucTe)}
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+      )}
 
       {/* Thanh ly Confirm Dialog */}
       <ConfirmDialog

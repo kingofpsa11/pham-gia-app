@@ -1,15 +1,17 @@
 import { useState, useEffect, useCallback } from 'react';
-import { hopDongApi, khachHangApi } from '../../lib/api';
+import { hopDongApi } from '../../lib/api';
 import { useToastStore } from '../../store/toast';
 import { useAuthStore } from '../../store/auth';
 import { useNavigate } from 'react-router-dom';
 import {
   formatVND,
   formatDate,
+  sortTheoNgayMoiNhat,
   trangThaiHopDongLabel,
   trangThaiHopDongColor,
 } from '../../lib/utils';
 import SearchInput from '../../components/ui/SearchInput';
+import KhachHangFilterField from '../../components/shared/KhachHangFilterField';
 import Pagination from '../../components/ui/Pagination';
 import ConfirmDialog from '../../components/ui/ConfirmDialog';
 import EmptyState from '../../components/ui/EmptyState';
@@ -34,8 +36,6 @@ export default function HopDongList() {
   const [currentPage, setCurrentPage] = useState(1);
   const [totalCount, setTotalCount] = useState(0);
 
-  // Filters
-  const [khachHangList, setKhachHangList] = useState<KhachHang[]>([]);
   const [filterKhachHang, setFilterKhachHang] = useState('');
   const [filterTrangThai, setFilterTrangThai] = useState('');
   const [filterDateFrom, setFilterDateFrom] = useState('');
@@ -44,12 +44,6 @@ export default function HopDongList() {
   const [deleteTarget, setDeleteTarget] = useState<HopDongRow | null>(null);
 
   const totalPages = Math.ceil(totalCount / PAGE_SIZE);
-
-  useEffect(() => {
-    khachHangApi.list({ limit: 1000 }).then((res) => {
-      setKhachHangList(res.data as KhachHang[]);
-    });
-  }, []);
 
   const fetchHopDong = useCallback(async () => {
     setLoading(true);
@@ -66,11 +60,11 @@ export default function HopDongList() {
 
       const hopDongRows: HopDongRow[] = (res.data || []).map((r: any) => ({
         ...r,
-        khach_hang: r.khach_hang,
+        khach_hang: r.khach_hang ?? (r.ten_cong_ty ? { ten_cong_ty: r.ten_cong_ty } : undefined),
         tong_gia_tri: r.tong_gia_tri,
       }));
 
-      setData(hopDongRows);
+      setData(sortTheoNgayMoiNhat(hopDongRows, (r) => r.ngay_hop_dong));
       setTotalCount(res.total || 0);
     } catch (err) {
       console.error('Loi tai danh sach hop dong:', err);
@@ -156,18 +150,10 @@ export default function HopDongList() {
           </div>
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">Khách hàng</label>
-            <select
+            <KhachHangFilterField
               value={filterKhachHang}
-              onChange={(e) => setFilterKhachHang(e.target.value)}
-              className="select-field"
-            >
-              <option value="">Tất cả</option>
-              {khachHangList.map((kh) => (
-                <option key={kh.id} value={kh.id}>
-                  {kh.ten_cong_ty}
-                </option>
-              ))}
-            </select>
+              onChange={setFilterKhachHang}
+            />
           </div>
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">Trạng thái</label>

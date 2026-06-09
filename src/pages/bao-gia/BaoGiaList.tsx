@@ -1,10 +1,11 @@
 import { useState, useEffect, useCallback } from 'react';
-import { baoGiaApi, khachHangApi } from '../../lib/api';
+import { baoGiaApi } from '../../lib/api';
 import { useToastStore } from '../../store/toast';
 import { useAuthStore } from '../../store/auth';
 import { useNavigate, Link } from 'react-router-dom';
-import { formatDate } from '../../lib/utils';
+import { formatDate, formatVND, sortTheoNgayMoiNhat } from '../../lib/utils';
 import SearchInput from '../../components/ui/SearchInput';
+import KhachHangFilterField from '../../components/shared/KhachHangFilterField';
 import Pagination from '../../components/ui/Pagination';
 import ConfirmDialog from '../../components/ui/ConfirmDialog';
 import EmptyState from '../../components/ui/EmptyState';
@@ -15,6 +16,7 @@ const PAGE_SIZE = 10;
 
 interface BaoGiaRow extends BaoGia {
   khach_hang?: KhachHang;
+  tong_thanh_toan?: number;
 }
 
 export default function BaoGiaList() {
@@ -28,8 +30,6 @@ export default function BaoGiaList() {
   const [currentPage, setCurrentPage] = useState(1);
   const [totalCount, setTotalCount] = useState(0);
 
-  // Filters
-  const [khachHangList, setKhachHangList] = useState<KhachHang[]>([]);
   const [filterKhachHang, setFilterKhachHang] = useState('');
   const [filterMauBaoGia, setFilterMauBaoGia] = useState('');
   const [filterDateFrom, setFilterDateFrom] = useState('');
@@ -38,12 +38,6 @@ export default function BaoGiaList() {
   const [deleteTarget, setDeleteTarget] = useState<BaoGiaRow | null>(null);
 
   const totalPages = Math.ceil(totalCount / PAGE_SIZE);
-
-  useEffect(() => {
-    khachHangApi.list({ limit: 1000 }).then(({ data }) => {
-      if (data) setKhachHangList(data as KhachHang[]);
-    });
-  }, []);
 
   const fetchBaoGia = useCallback(async () => {
     setLoading(true);
@@ -62,7 +56,7 @@ export default function BaoGiaList() {
         ...r,
         khach_hang: r.khach_hang ?? (r.ten_cong_ty ? { ten_cong_ty: r.ten_cong_ty } : undefined),
       }));
-      setData(mappedRows);
+      setData(sortTheoNgayMoiNhat(mappedRows, (r) => r.ngay_bao_gia));
       setTotalCount(result.total || 0);
     } catch (err) {
       console.error('Loi tai danh sach bao gia:', err);
@@ -148,18 +142,11 @@ export default function BaoGiaList() {
           </div>
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">Khách hàng</label>
-            <select
+            <KhachHangFilterField
               value={filterKhachHang}
-              onChange={(e) => setFilterKhachHang(e.target.value)}
-              className="select-field"
-            >
-              <option value="">Tất cả</option>
-              {khachHangList.map((kh) => (
-                <option key={kh.id} value={kh.id}>
-                  {kh.ten_cong_ty}
-                </option>
-              ))}
-            </select>
+              onChange={setFilterKhachHang}
+              placeholder="Tìm khách hàng..."
+            />
           </div>
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">Mẫu báo giá</label>
@@ -197,6 +184,7 @@ export default function BaoGiaList() {
                   <th className="table-header">Dự án</th>
                   <th className="table-header">Phiên bản</th>
                   <th className="table-header">Mẫu</th>
+                  <th className="table-header text-right">Tổng (gồm thuế)</th>
                   <th className="table-header">Trạng thái</th>
                   <th className="table-header w-20"></th>
                 </tr>
@@ -204,7 +192,7 @@ export default function BaoGiaList() {
               <tbody className="divide-y divide-gray-200">
                 {loading ? (
                   <tr>
-                    <td colSpan={8} className="py-12 text-center">
+                    <td colSpan={9} className="py-12 text-center">
                       <div className="flex flex-col items-center gap-3">
                         <div className="w-8 h-8 border-4 border-primary-200 border-t-primary-600 rounded-full animate-spin" />
                         <p className="text-sm text-gray-500">Đang tải...</p>
@@ -228,6 +216,9 @@ export default function BaoGiaList() {
                         <span className="badge-info">PB{bg.phien_ban}</span>
                       </td>
                       <td className="table-cell text-gray-500">{bg.mau_bao_gia || '--'}</td>
+                      <td className="table-cell text-right font-medium text-gray-900 whitespace-nowrap">
+                        {formatVND(Number(bg.tong_thanh_toan) || 0)}
+                      </td>
                       <td className="table-cell">
                         {bg.hop_dong_id ? (
                           <span className="badge-success">Đã chuyển HĐ</span>

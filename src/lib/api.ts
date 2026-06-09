@@ -1,16 +1,18 @@
-const API_BASE = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/mysql-api`;
+export const API_BASE = '/api';
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
+  const token = localStorage.getItem('token');
   const res = await fetch(`${API_BASE}${path}`, {
     ...options,
     headers: {
       'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...options?.headers,
     },
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(err.error || `API Error: ${res.status}`);
+    throw new Error(err.message || err.error || `API Error: ${res.status}`);
   }
   return res.json();
 }
@@ -48,6 +50,11 @@ export const baoGiaApi = {
   get: (id: number) =>
     request<{ data: any }>(`/bao-gia/${id}`),
 
+  checkSoTrung: (params: { so_bao_gia: string; nam: number; ngay_bao_gia?: string; exclude_id?: number }) =>
+    request<{ exists: boolean; data?: { id: number; so_bao_gia: string } | null }>(
+      `/bao-gia/kiem-tra-so${buildQuery(params)}`
+    ),
+
   create: (data: any) =>
     request<{ data: any }>('/bao-gia', { method: 'POST', body: JSON.stringify(data) }),
 
@@ -75,11 +82,19 @@ export const hopDongApi = {
   get: (id: number) =>
     request<{ data: any }>(`/hop-dong/${id}`),
 
+  checkSoTrung: (params: { so_hop_dong: string; nam: number; ngay_hop_dong?: string; exclude_id?: number }) =>
+    request<{ exists: boolean; data?: { id: number; so_hop_dong: string } | null }>(
+      `/hop-dong/kiem-tra-so${buildQuery(params)}`
+    ),
+
   create: (data: any) =>
     request<{ data: any }>('/hop-dong', { method: 'POST', body: JSON.stringify(data) }),
 
   update: (id: number, data: any) =>
     request<{ data: any }>(`/hop-dong/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+
+  updateStatus: (id: number, trang_thai: string) =>
+    request<{ data: any }>(`/hop-dong/${id}/trang-thai`, { method: 'PATCH', body: JSON.stringify({ trang_thai }) }),
 
   delete: (id: number) =>
     request<{ success: boolean }>(`/hop-dong/${id}`, { method: 'DELETE' }),
@@ -348,6 +363,12 @@ export const dongTienMoiApi = {
   delete: (id: number) =>
     request<{ success: boolean }>(`/dong-tien-moi/${id}`, { method: 'DELETE' }),
 
+  bulkUpdate: (items: any[]) =>
+    request<{ updated: number; created: number; failed: number; errors: { excelRow: number; message: string }[] }>(
+      '/dong-tien-moi/bulk-update',
+      { method: 'POST', body: JSON.stringify({ items }) },
+    ),
+
   checkExists: (ngay_giao_dich: string, tai_khoan_tien_id: number) =>
     request<{ data: any[]; total: number }>(`/dong-tien-moi${buildQuery({ ngay_giao_dich, tai_khoan_tien_id, limit: 1 })}`),
 };
@@ -380,4 +401,31 @@ export const dongTienPhanBoApi = {
 export const baoCaoDongTienMoiApi = {
   get: (params: { date_from?: string; date_to?: string; tai_khoan_tien_id?: string; pham_vi?: string } = {}) =>
     request<any>(`/bao-cao-dong-tien-moi${buildQuery(params)}`),
+};
+
+// ===================== CAU HINH / MAU EXCEL =====================
+export const cauHinhApi = {
+  get: (key: string) =>
+    request<{ data: { key: string; value: string; updated_at: string } | null }>(`/cau-hinh/${key}`),
+
+  delete: (key: string) =>
+    request<{ success: boolean }>(`/cau-hinh/${key}`, { method: 'DELETE' }),
+};
+
+// ===================== USERS (Admin table) =====================
+export const usersApi = {
+  list: () =>
+    request<{ data: any[] }>('/users'),
+
+  create: (data: { email: string; password: string; ten?: string; role?: string }) =>
+    request<{ data: any }>('/users', { method: 'POST', body: JSON.stringify(data) }),
+
+  update: (id: string, data: { ten?: string; email?: string; role?: string }) =>
+    request<{ success: boolean }>(`/users/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+
+  changePassword: (data: { currentPassword?: string; newPassword: string }) =>
+    request<{ success: boolean }>('/users/me/password', { method: 'PUT', body: JSON.stringify(data) }),
+
+  delete: (id: string) =>
+    request<{ success: boolean }>(`/users/${id}`, { method: 'DELETE' }),
 };

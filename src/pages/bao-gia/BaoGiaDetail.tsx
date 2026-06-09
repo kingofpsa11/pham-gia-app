@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { baoGiaApi, tepDinhKemApi } from '../../lib/api';
 import { useToastStore } from '../../store/toast';
 import { useNavigate, useParams, Link } from 'react-router-dom';
@@ -13,7 +13,11 @@ import {
   calcTongTruocVAT,
   calcTongVAT,
   calcTongThanhToan,
+  applyVanChuyenToChiTiet,
+  calcTongGiaVonCoVanChuyen,
+  calcLoiNhuanGop,
 } from '../../lib/utils';
+import EntityInfoPanel from '../../components/shared/EntityInfoPanel';
 import BaoGiaForm from './BaoGiaForm';
 import {
   ArrowLeft,
@@ -25,7 +29,6 @@ import {
   FileDown,
   HardDrive,
 } from 'lucide-react';
-import { supabase } from '../../lib/supabase';
 import type { BaoGia, BaoGiaChiTiet, KhachHang, TepDinhKem } from '../../types';
 
 interface BaoGiaFull extends BaoGia {
@@ -52,14 +55,53 @@ export default function BaoGiaDetail() {
     if (id) fetchBaoGia();
   }, [id]);
 
+  const cheDoVC = Number(baoGia?.che_do_van_chuyen ?? 1);
+  const phiVC = Number(baoGia?.phi_van_chuyen || 0);
+
+  const withVCItems = useMemo(
+    () => (baoGia ? applyVanChuyenToChiTiet(chiTiet, cheDoVC, phiVC) : []),
+    [chiTiet, cheDoVC, phiVC, baoGia]
+  );
+
+  const calcItems = useMemo(
+    () =>
+      withVCItems.map((ct) => ({
+        so_luong: ct.so_luong,
+        gia_ban_thuc_te: ct.gia_ban_thuc_te,
+        thue_suat: ct.thue_suat,
+        don_gia_von: ct.don_gia_von,
+      })),
+    [withVCItems]
+  );
+
+  const tongTruocVAT = useMemo(() => calcTongTruocVAT(calcItems), [calcItems]);
+  const tongVAT = useMemo(() => calcTongVAT(calcItems), [calcItems]);
+  const tongThanhToan = useMemo(
+    () => calcTongThanhToan(tongTruocVAT, tongVAT, cheDoVC === 0 ? phiVC : 0),
+    [tongTruocVAT, tongVAT, cheDoVC, phiVC]
+  );
+
+  const vat8 = useMemo(
+    () =>
+      withVCItems
+        .filter((r) => Number(r.thue_suat) === 8)
+        .reduce((s, r) => s + calcVAT(calcThanhTienBan(Number(r.so_luong), r.gia_ban_thuc_te), 8), 0),
+    [withVCItems]
+  );
+
+  const vat10 = useMemo(
+    () =>
+      withVCItems
+        .filter((r) => Number(r.thue_suat) === 10)
+        .reduce((s, r) => s + calcVAT(calcThanhTienBan(Number(r.so_luong), r.gia_ban_thuc_te), 10), 0),
+    [withVCItems]
+  );
+
   async function fetchBaoGia() {
     setLoading(true);
     try {
       const bgId = Number(id);
-      const [bgRes, fileRes] = await Promise.all([
-        baoGiaApi.get(bgId),
-        tepDinhKemApi.list('bao_gia', bgId),
-      ]);
+      const bgRes = await baoGiaApi.get(bgId);
       if (!bgRes.data) {
         addToast('error', 'Không tìm thấy báo giá');
         navigate('/bao-gia');
@@ -72,7 +114,13 @@ export default function BaoGiaDetail() {
       };
       setBaoGia(enriched);
       setChiTiet(raw.chi_tiet || []);
-      setFileList((fileRes.data as TepDinhKem[]) || []);
+
+      try {
+        const fileRes = await tepDinhKemApi.list('bao_gia', bgId);
+        setFileList((fileRes.data as TepDinhKem[]) || []);
+      } catch {
+        setFileList([]);
+      }
     } catch (err) {
       console.error('Loi tai bao gia:', err);
       addToast('error', 'Không thể tải thông tin báo giá');
@@ -115,20 +163,21 @@ export default function BaoGiaDetail() {
     if (!baoGia) return;
     setExporting(true);
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      const token = session?.access_token;
-      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-      const resp = await fetch(`${supabaseUrl}/functions/v1/xuat-bao-gia-excel`, {
+      const token = localStorage.getItem('token');
+      const resp = await fetch('/api/xuat-bao-gia-excel', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
-        body: JSON.stringify({ bao_gia_id: baoGia.id, mau_key: mauKey(baoGia.mau_bao_gia) }),
+        body: JSON.stringify({
+          bao_gia_id: baoGia.id,
+          mau_key: mauKey(baoGia.mau_bao_gia),
+        }),
       });
       if (!resp.ok) {
         const err = await resp.json().catch(() => ({ error: 'Lỗi không xác định' }));
-        throw new Error(err.error || 'Xuất Excel thất bại');
+        throw new Error(err.message || err.error || 'Xuất Excel thất bại');
       }
       const link = resp.headers.get('X-Drive-Link');
       if (link) {
@@ -192,129 +241,124 @@ export default function BaoGiaDetail() {
 
   if (!baoGia) return null;
 
-  const calcItems = chiTiet.map((ct) => ({
-    so_luong: ct.so_luong,
-    gia_ban_thuc_te: ct.gia_ban_thuc_te,
-    thue_suat: ct.thue_suat,
-    don_gia_von: ct.don_gia_von,
-  }));
-  const tongTruocVAT = calcTongTruocVAT(calcItems);
-  const tongVAT = calcTongVAT(calcItems);
-  const cheDoVC = Number(baoGia.che_do_van_chuyen ?? 1);
-  const phiVC = Number(baoGia.phi_van_chuyen || 0);
-  // mode=0 (Riêng): cộng VC vào tổng; mode=1/2: VC đã tính vào giá bán/giá vốn
-  const tongThanhToan = calcTongThanhToan(tongTruocVAT, tongVAT, cheDoVC === 0 ? phiVC : 0);
-
   const tongGiaVonThuan = calcItems.reduce((s, item) => {
     const sl = typeof item.so_luong === 'string' ? parseFloat(item.so_luong) || 0 : (item.so_luong ?? 0);
     const gv = typeof item.don_gia_von === 'string' ? parseFloat(item.don_gia_von) || 0 : (item.don_gia_von ?? 0);
     return s + sl * gv;
   }, 0);
-  // mode=1/2: phí VC do công ty chịu → cộng vào giá vốn để tính lợi nhuận thực
-  const tongGiaVon = tongGiaVonThuan + (cheDoVC !== 0 ? phiVC : 0);
-  const loiNhuanGop = tongTruocVAT - tongGiaVon;
+  const tongGiaVon = calcTongGiaVonCoVanChuyen(tongGiaVonThuan, phiVC, cheDoVC);
+  const vcHoTro = cheDoVC === 2;
+  const loiNhuanGop = calcLoiNhuanGop(calcItems, cheDoVC, phiVC);
   const tyLeLoiNhuan = tongTruocVAT > 0 ? Math.round((loiNhuanGop / tongTruocVAT) * 100) : 0;
-
-  const vat8 = calcItems.reduce((s, item) => {
-    const thue = typeof item.thue_suat === 'string' ? parseFloat(item.thue_suat) || 0 : (item.thue_suat ?? 0);
-    if (thue !== 8) return s;
-    const sl = typeof item.so_luong === 'string' ? parseFloat(item.so_luong) || 0 : (item.so_luong ?? 0);
-    const gia = typeof item.gia_ban_thuc_te === 'string' ? parseFloat(item.gia_ban_thuc_te) || 0 : (item.gia_ban_thuc_te ?? 0);
-    return s + sl * gia * 8 / 100;
-  }, 0);
-  const vat10 = calcItems.reduce((s, item) => {
-    const thue = typeof item.thue_suat === 'string' ? parseFloat(item.thue_suat) || 0 : (item.thue_suat ?? 0);
-    if (thue !== 10) return s;
-    const sl = typeof item.so_luong === 'string' ? parseFloat(item.so_luong) || 0 : (item.so_luong ?? 0);
-    const gia = typeof item.gia_ban_thuc_te === 'string' ? parseFloat(item.gia_ban_thuc_te) || 0 : (item.gia_ban_thuc_te ?? 0);
-    return s + sl * gia * 10 / 100;
-  }, 0);
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center gap-4">
+      <div className="flex items-start gap-4">
         <button
           onClick={() => navigate('/bao-gia')}
-          className="p-2 rounded-lg text-gray-500 hover:bg-gray-100 transition-colors"
+          className="p-2 rounded-lg text-gray-500 hover:bg-gray-100 transition-colors shrink-0"
           title="Quay lại"
         >
           <ArrowLeft className="w-5 h-5" />
         </button>
-        <div className="flex-1 min-w-0">
-          <h1 className="text-2xl font-bold text-gray-900 truncate">{baoGia.so_bao_gia}</h1>
-          <p className="mt-0.5 text-sm text-gray-500 truncate">
-            {baoGia.khach_hang?.ten_cong_ty}
-            {baoGia.ten_du_an ? ` - ${baoGia.ten_du_an}` : ''}
-          </p>
-        </div>
-        {!editMode && (
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setEditMode(true)}
-              className="btn-primary flex items-center gap-2"
-            >
-              <Pencil className="w-4 h-4" />
-              Chỉnh sửa
-            </button>
-            <button
-              onClick={handleClone}
-              disabled={cloning}
-              className="btn-secondary flex items-center gap-2"
-            >
-              <Copy className="w-4 h-4" />
-              {cloning ? 'Đang nhân bản...' : 'Nhân bản'}
-            </button>
-            <button
-              onClick={handleExportExcel}
-              disabled={exporting || !baoGia.mau_bao_gia}
-              title={!baoGia.mau_bao_gia ? 'Báo giá chưa chọn mẫu' : 'Xuất file Excel theo mẫu'}
-              className="btn-secondary flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              <FileDown className="w-4 h-4" />
-              {exporting ? 'Đang xuất...' : 'Xuất Excel'}
-            </button>
-            {driveLink && (
-              <a
-                href={driveLink}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="btn-secondary flex items-center gap-2 text-blue-600 border-blue-200 hover:bg-blue-50"
-                title="Mở file trên Google Drive"
-              >
-                <HardDrive className="w-4 h-4" />
-                Xem trên Drive
-              </a>
+        <div className="flex-1 min-w-0 space-y-3">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div className="min-w-0">
+              <h1 className="text-2xl font-bold text-gray-900 truncate">{baoGia.so_bao_gia}</h1>
+              <p className="mt-0.5 text-sm text-gray-500 truncate">
+                {baoGia.khach_hang?.ten_cong_ty}
+                {baoGia.ten_du_an ? ` — ${baoGia.ten_du_an}` : ''}
+              </p>
+            </div>
+            {!editMode && (
+              <div className="flex flex-wrap items-center gap-2 shrink-0">
+                <button
+                  onClick={() => setEditMode(true)}
+                  className="btn-primary flex items-center gap-2"
+                >
+                  <Pencil className="w-4 h-4" />
+                  Chỉnh sửa
+                </button>
+                <button
+                  onClick={handleClone}
+                  disabled={cloning}
+                  className="btn-secondary flex items-center gap-2"
+                >
+                  <Copy className="w-4 h-4" />
+                  {cloning ? 'Đang nhân bản...' : 'Nhân bản'}
+                </button>
+                <button
+                  onClick={handleExportExcel}
+                  disabled={exporting || !baoGia.mau_bao_gia}
+                  title={!baoGia.mau_bao_gia ? 'Báo giá chưa chọn mẫu' : 'Xuất file Excel theo mẫu'}
+                  className="btn-secondary flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <FileDown className="w-4 h-4" />
+                  {exporting ? 'Đang xuất...' : 'Xuất Excel'}
+                </button>
+                {driveLink && (
+                  <a
+                    href={driveLink}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="btn-secondary flex items-center gap-2 text-blue-600 border-blue-200 hover:bg-blue-50"
+                    title="Mở file trên Google Drive"
+                  >
+                    <HardDrive className="w-4 h-4" />
+                    Xem trên Drive
+                  </a>
+                )}
+                {!baoGia.hop_dong_id && (
+                  <button
+                    onClick={handleChuyenHopDong}
+                    className="btn-secondary flex items-center gap-2"
+                  >
+                    <BookOpen className="w-4 h-4" />
+                    Chuyển thành hợp đồng
+                  </button>
+                )}
+                {baoGia.hop_dong_id && (
+                  <Link
+                    to={`/hop-dong/${baoGia.hop_dong_id}`}
+                    className="badge-success flex items-center gap-1 px-3 py-2"
+                  >
+                    <BookOpen className="w-4 h-4" />
+                    Xem hợp đồng
+                  </Link>
+                )}
+              </div>
             )}
-            {!baoGia.hop_dong_id && (
+            {editMode && (
               <button
-                onClick={handleChuyenHopDong}
-                className="btn-secondary flex items-center gap-2"
+                onClick={() => setEditMode(false)}
+                className="btn-secondary flex items-center gap-2 shrink-0"
               >
-                <BookOpen className="w-4 h-4" />
-                Chuyển thành hợp đồng
+                <X className="w-4 h-4" />
+                Thoát chỉnh sửa
               </button>
             )}
-            {baoGia.hop_dong_id && (
-              <Link
-                to={`/hop-dong/${baoGia.hop_dong_id}`}
-                className="badge-success flex items-center gap-1 px-3 py-2"
-              >
-                <BookOpen className="w-4 h-4" />
-                Xem hợp đồng
-              </Link>
-            )}
           </div>
-        )}
-        {editMode && (
-          <button
-            onClick={() => setEditMode(false)}
-            className="btn-secondary flex items-center gap-2"
-          >
-            <X className="w-4 h-4" />
-            Thoát chỉnh sửa
-          </button>
-        )}
+          {!editMode && (
+            <EntityInfoPanel
+              embedded
+              fields={[
+                { label: 'Ngày báo giá', value: formatDate(baoGia.ngay_bao_gia) },
+                { label: 'Phiên bản', value: `PB${baoGia.phien_ban}` },
+                { label: 'Mẫu BG', value: baoGia.mau_bao_gia || '--' },
+                { label: 'Chế độ VC', value: cheDoVanChuyenLabel(baoGia.che_do_van_chuyen) },
+                { label: 'Phí VC', value: formatVND(baoGia.phi_van_chuyen) },
+                {
+                  label: 'Trạng thái',
+                  value: baoGia.hop_dong_id ? (
+                    <span className="badge-success">Đã chuyển HĐ</span>
+                  ) : (
+                    <span className="badge-warning">Chưa chuyển</span>
+                  ),
+                },
+              ]}
+            />
+          )}
+        </div>
       </div>
 
       {/* Edit mode: inline form */}
@@ -331,57 +375,6 @@ export default function BaoGiaDetail() {
       {/* View mode */}
       {!editMode && (
         <>
-          {/* Thong tin bao gia */}
-          <div className="card">
-            <div className="card-header">
-              <h2 className="text-lg font-semibold text-gray-900">Thông tin báo giá</h2>
-            </div>
-            <div className="card-body">
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-                <div>
-                  <p className="text-xs font-medium text-gray-500">Số báo giá</p>
-                  <p className="text-sm font-semibold text-gray-900">{baoGia.so_bao_gia}</p>
-                </div>
-                <div>
-                  <p className="text-xs font-medium text-gray-500">Ngày báo giá</p>
-                  <p className="text-sm font-semibold text-gray-900">{formatDate(baoGia.ngay_bao_gia)}</p>
-                </div>
-                <div>
-                  <p className="text-xs font-medium text-gray-500">Khách hàng</p>
-                  <p className="text-sm font-semibold text-gray-900">{baoGia.khach_hang?.ten_cong_ty || '--'}</p>
-                </div>
-                <div>
-                  <p className="text-xs font-medium text-gray-500">Dự án</p>
-                  <p className="text-sm font-semibold text-gray-900">{baoGia.ten_du_an || '--'}</p>
-                </div>
-                <div>
-                  <p className="text-xs font-medium text-gray-500">Phiên bản</p>
-                  <p className="text-sm font-semibold text-gray-900">PB{baoGia.phien_ban}</p>
-                </div>
-                <div>
-                  <p className="text-xs font-medium text-gray-500">Mẫu báo giá</p>
-                  <p className="text-sm font-semibold text-gray-900">{baoGia.mau_bao_gia || '--'}</p>
-                </div>
-                <div>
-                  <p className="text-xs font-medium text-gray-500">Chế độ vận chuyển</p>
-                  <p className="text-sm font-semibold text-gray-900">{cheDoVanChuyenLabel(baoGia.che_do_van_chuyen)}</p>
-                </div>
-                <div>
-                  <p className="text-xs font-medium text-gray-500">Phí vận chuyển</p>
-                  <p className="text-sm font-semibold text-gray-900">{formatVND(baoGia.phi_van_chuyen)}</p>
-                </div>
-                <div>
-                  <p className="text-xs font-medium text-gray-500">Trạng thái</p>
-                  {baoGia.hop_dong_id ? (
-                    <span className="badge-success">Đã chuyển HĐ</span>
-                  ) : (
-                    <span className="badge-warning">Chưa chuyển</span>
-                  )}
-                </div>
-              </div>
-            </div>
-          </div>
-
           {/* Chi tiet bao gia */}
           <div className="card">
             <div className="card-header">
@@ -407,9 +400,10 @@ export default function BaoGiaDetail() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-200">
-                      {chiTiet.map((ct) => {
+                      {withVCItems.map((ct) => {
                         const thanhTien = calcThanhTienBan(ct.so_luong, ct.gia_ban_thuc_te);
                         const vat = calcVAT(thanhTien, ct.thue_suat);
+                        const giaChua = Number(ct.gia_ban_chua_van_chuyen) || 0;
                         return (
                           <tr key={ct.id} className="hover:bg-gray-50 transition-colors">
                             <td className="table-cell font-medium text-gray-900 break-words whitespace-normal">{ct.ten_san_pham}</td>
@@ -417,7 +411,14 @@ export default function BaoGiaDetail() {
                             <td className="table-cell text-right">{formatNumber(ct.so_luong)}</td>
                             <td className="table-cell text-right">{formatVND(ct.don_gia_von)}</td>
                             <td className="table-cell text-right">{formatPercent(ct.lai_suat_phan_tram)}</td>
-                            <td className="table-cell text-right">{formatVND(ct.gia_ban_thuc_te)}</td>
+                            <td className="table-cell text-right">
+                              <div>{formatVND(ct.gia_ban_thuc_te)}</div>
+                              {cheDoVC === 1 && ct.chi_phi_van_chuyen_phan_bo > 0 && (
+                                <div className="text-xs text-orange-600">
+                                  gốc {formatVND(giaChua)} + VC {formatVND(ct.chi_phi_van_chuyen_phan_bo)}
+                                </div>
+                              )}
+                            </td>
                             <td className="table-cell text-right">{formatPercent(ct.thue_suat)}</td>
                             <td className="table-cell text-right font-semibold text-gray-900">{formatVND(thanhTien)}</td>
                             <td className="table-cell text-right text-gray-500">{formatVND(vat)}</td>
@@ -434,19 +435,53 @@ export default function BaoGiaDetail() {
           {/* Summary */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             {/* Loi nhuan gop */}
-            <div className="rounded-xl border border-green-200 bg-green-50 p-5 flex flex-col justify-between">
-              <div className="flex items-center justify-between mb-3">
+            <div className="rounded-xl border border-green-200 bg-green-50 p-4">
+              <div className="flex items-center justify-between mb-2">
                 <span className="text-xs font-bold text-green-800 tracking-wide uppercase">Lợi nhuận gộp dự kiến</span>
                 <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${tyLeLoiNhuan >= 0 ? 'bg-green-200 text-green-800' : 'bg-red-200 text-red-800'}`}>
                   {tyLeLoiNhuan}%
                 </span>
               </div>
-              <div className={`text-3xl font-bold ${loiNhuanGop >= 0 ? 'text-green-700' : 'text-red-600'}`}>
-                {formatVND(loiNhuanGop)}
+              <div className="space-y-1.5 text-sm">
+                <div className="flex justify-between">
+                  <span className="text-gray-600">{vcHoTro ? 'Giá vốn hàng:' : 'Tổng giá vốn:'}</span>
+                  <span className="font-medium text-red-600">
+                    {tongGiaVonThuan > 0 ? formatVND(tongGiaVonThuan) : <span className="text-red-400">0</span>}
+                  </span>
+                </div>
+                {vcHoTro && phiVC > 0 && (
+                  <div className="flex justify-between">
+                    <span className="text-gray-600">Chi phí VC (hỗ trợ):</span>
+                    <span className="font-medium text-orange-700">{formatVND(phiVC)}</span>
+                  </div>
+                )}
+                {vcHoTro && (
+                  <div className="flex justify-between font-medium">
+                    <span className="text-gray-700">Tổng giá vốn (gồm VC):</span>
+                    <span className="text-red-600">
+                      {tongGiaVon > 0 ? formatVND(tongGiaVon) : <span className="text-red-400">0</span>}
+                    </span>
+                  </div>
+                )}
+                {!vcHoTro && cheDoVC === 0 && phiVC > 0 && (
+                  <div className="flex justify-between">
+                    <span className="text-gray-600">Chi phí vận chuyển (thu riêng):</span>
+                    <span className="font-medium text-orange-700">{formatVND(phiVC)}</span>
+                  </div>
+                )}
+                <div className="flex justify-between">
+                  <span className="text-gray-600">Tổng giá bán:</span>
+                  <span className="font-medium text-gray-900">
+                    {tongTruocVAT > 0 ? formatVND(tongTruocVAT) : '0'}
+                  </span>
+                </div>
+                <div className="border-t border-green-200 pt-2 mt-2 flex justify-between items-center">
+                  <span className="font-bold text-green-800 uppercase text-xs tracking-wide">Lợi nhuận:</span>
+                  <span className={`text-lg font-bold ${loiNhuanGop >= 0 ? 'text-green-700' : 'text-red-600'}`}>
+                    {formatVND(loiNhuanGop)}
+                  </span>
+                </div>
               </div>
-              <p className="text-xs text-green-600 mt-2">
-                Tiền hàng: {formatVND(tongTruocVAT)} &nbsp;·&nbsp; Giá vốn: {formatVND(tongGiaVon)}
-              </p>
             </div>
 
             {/* Tong thanh toan */}
@@ -464,12 +499,6 @@ export default function BaoGiaDetail() {
                   <span className="text-red-500">Thuế VAT 10%</span>
                   <span className="font-semibold text-red-500">{formatVND(vat10)}</span>
                 </div>
-                {(baoGia.phi_van_chuyen ?? 0) > 0 && (
-                  <div className="flex items-center justify-between px-5 py-3 text-sm">
-                    <span className="text-gray-500">Phí vận chuyển</span>
-                    <span className="font-semibold text-gray-900">{formatVND(baoGia.phi_van_chuyen)}</span>
-                  </div>
-                )}
                 <div className="flex items-center justify-between px-5 py-4 bg-blue-50">
                   <span className="text-sm font-bold text-gray-900 uppercase tracking-wide">Tổng thanh toán</span>
                   <span className="text-xl font-bold text-blue-600">{formatVND(tongThanhToan)}</span>

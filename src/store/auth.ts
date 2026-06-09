@@ -1,6 +1,21 @@
 import { create } from 'zustand';
-import { supabase } from '../lib/supabase';
 import type { UserProfile } from '../types';
+
+const TOKEN_KEY = 'token';
+const USER_KEY = 'user';
+
+interface LoginApiUser {
+  id: number | string;
+  email: string;
+  role: 'admin' | 'staff';
+  full_name?: string;
+  ten?: string;
+}
+
+interface LoginApiResponse {
+  token: string;
+  user: LoginApiUser;
+}
 
 interface AuthState {
   user: UserProfile | null;
@@ -13,29 +28,65 @@ interface AuthState {
   initialize: () => Promise<void>;
 }
 
+function mapApiUserToProfile(apiUser: LoginApiUser): UserProfile {
+  return {
+    id: String(apiUser.id),
+    email: apiUser.email,
+    role: apiUser.role,
+    ten: apiUser.full_name ?? apiUser.ten ?? '',
+  };
+}
+
+function isValidUserProfile(value: unknown): value is UserProfile {
+  if (!value || typeof value !== 'object') return false;
+  const u = value as Record<string, unknown>;
+  return (
+    typeof u.id === 'string' &&
+    typeof u.email === 'string' &&
+    (u.role === 'admin' || u.role === 'staff')
+  );
+}
+
+function clearStoredAuth() {
+  localStorage.removeItem(TOKEN_KEY);
+  localStorage.removeItem(USER_KEY);
+}
+
+function persistAuth(token: string, user: UserProfile) {
+  localStorage.setItem(TOKEN_KEY, token);
+  localStorage.setItem(USER_KEY, JSON.stringify(user));
+}
+
 export const useAuthStore = create<AuthState>((set, get) => ({
   user: null,
   session: null,
   loading: true,
 
   login: async (email: string, password: string) => {
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) throw error;
-
-    const { data: profile } = await supabase
-      .from('user_profiles')
-      .select('*')
-      .eq('id', data.user.id)
-      .maybeSingle();
-
-    set({
-      session: data.session?.access_token ?? null,
-      user: profile ? { id: profile.id, email: data.user.email ?? '', role: profile.role, ten: profile.ten } : null,
+    const res = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
     });
+
+    const data = await res.json().catch(() => ({}));
+
+    if (!res.ok) {
+      throw new Error(data.error || data.message || 'Đăng nhập thất bại');
+    }
+
+    const { token, user: apiUser } = data as LoginApiResponse;
+    if (!token || !apiUser) {
+      throw new Error('Phản hồi đăng nhập không hợp lệ');
+    }
+
+    const user = mapApiUserToProfile(apiUser);
+    persistAuth(token, user);
+    set({ session: token, user });
   },
 
   logout: async () => {
-    await supabase.auth.signOut();
+    clearStoredAuth();
     set({ user: null, session: null });
   },
 
@@ -45,24 +96,34 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   initialize: async () => {
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session?.user) {
-        const { data: profile } = await supabase
-          .from('user_profiles')
-          .select('*')
-          .eq('id', session.user.id)
-          .maybeSingle();
+      const token = localStorage.getItem(TOKEN_KEY);
+      const userRaw = localStorage.getItem(USER_KEY);
 
-        set({
-          session: session.access_token,
-          user: profile ? { id: profile.id, email: session.user.email ?? '', role: profile.role, ten: profile.ten } : null,
-          loading: false,
-        });
-      } else {
-        set({ loading: false });
+      if (!token || !userRaw) {
+        clearStoredAuth();
+        set({ user: null, session: null, loading: false });
+        return;
       }
+
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(userRaw);
+      } catch {
+        clearStoredAuth();
+        set({ user: null, session: null, loading: false });
+        return;
+      }
+
+      if (!isValidUserProfile(parsed)) {
+        clearStoredAuth();
+        set({ user: null, session: null, loading: false });
+        return;
+      }
+
+      set({ session: token, user: parsed, loading: false });
     } catch {
-      set({ loading: false });
+      clearStoredAuth();
+      set({ user: null, session: null, loading: false });
     }
   },
 }));

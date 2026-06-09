@@ -102,38 +102,64 @@ export default function KhachHangDetail() {
     try {
       const khId = Number(id);
 
-      const [
-        khRes,
-        bgRes,
-        hdRes,
-        pghRes,
-        dtRes,
-        fileRes,
-      ] = await Promise.all([
-        khachHangApi.get(khId),
-        baoGiaApi.byKhachHang(khId),
-        hopDongApi.byKhachHang(khId),
-        phieuGiaoHangApi.byKhachHang(khId),
-        dongTienApi.byEntity({ khach_hang_id: khId }),
-        tepDinhKemApi.list('khach_hang', khId),
-      ]);
-
+      const khRes = await khachHangApi.get(khId);
       if (!khRes.data) {
         addToast('error', 'Không tìm thấy khách hàng');
-        navigate('/khach-hang');
+        navigate('/danh-muc/khach-hang');
         return;
       }
 
       setKhachHang(khRes.data as KhachHang);
-      setBaoGiaList((bgRes.data as BaoGia[]) || []);
-      setHopDongList((hdRes.data as HopDong[]) || []);
-      setPhieuGiaoHangList((pghRes.data as PhieuGiaoHang[]) || []);
-      setDongTienList((dtRes.data as DongTien[]) || []);
-      setFileList((fileRes.data as TepDinhKem[]) || []);
 
-      // Calculate cong no
-      const pghData = (pghRes.data as PhieuGiaoHang[]) || [];
-      const dtData = (dtRes.data as DongTien[]) || [];
+      let bgRows: BaoGia[] = [];
+      let hdRows: HopDong[] = [];
+      let pghRows: PhieuGiaoHang[] = [];
+      let dtRows: DongTien[] = [];
+      let files: TepDinhKem[] = [];
+
+      try {
+        const bgRes = await baoGiaApi.byKhachHang(khId);
+        bgRows = (bgRes.data as BaoGia[]) || [];
+      } catch (e) {
+        console.error('Lỗi tải báo giá khách hàng:', e);
+      }
+
+      try {
+        const hdRes = await hopDongApi.byKhachHang(khId);
+        hdRows = (hdRes.data as HopDong[]) || [];
+      } catch (e) {
+        console.error('Lỗi tải hợp đồng khách hàng:', e);
+      }
+
+      try {
+        const pghRes = await phieuGiaoHangApi.byKhachHang(khId);
+        pghRows = (pghRes.data as PhieuGiaoHang[]) || [];
+      } catch (e) {
+        console.error('Lỗi tải phiếu giao hàng:', e);
+      }
+
+      try {
+        const dtRes = await dongTienApi.byEntity({ khach_hang_id: khId });
+        dtRows = (dtRes.data as DongTien[]) || [];
+      } catch (e) {
+        console.error('Lỗi tải dòng tiền:', e);
+      }
+
+      try {
+        const fileRes = await tepDinhKemApi.list('khach_hang', khId);
+        files = (fileRes.data as TepDinhKem[]) || [];
+      } catch (e) {
+        console.error('Lỗi tải file đính kèm:', e);
+      }
+
+      setBaoGiaList(bgRows);
+      setHopDongList(hdRows);
+      setPhieuGiaoHangList(pghRows);
+      setDongTienList(dtRows);
+      setFileList(files);
+
+      const pghData = pghRows;
+      const dtData = dtRows;
       const tongGhiNoPGH = pghData.reduce(
         (sum, pgh) => sum + (pgh.gia_tri_ghi_no || 0), 0
       );
@@ -222,7 +248,7 @@ export default function KhachHangDetail() {
       {/* Page Header */}
       <div className="flex items-center gap-4">
         <button
-          onClick={() => navigate('/khach-hang')}
+          onClick={() => navigate('/danh-muc/khach-hang')}
           className="p-2 rounded-lg text-gray-500 hover:bg-gray-100 transition-colors"
           title="Quay lại"
         >

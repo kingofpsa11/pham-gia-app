@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 
 interface NumInputProps {
   value: number;
@@ -28,17 +28,38 @@ export default function NumInput({
   format = 'number',
 }: NumInputProps) {
   const [focused, setFocused] = useState(false);
+  const [draft, setDraft] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const displayValue = focused
-    ? (isInteger ? String(Math.round(value)) : String(value))
-    : formatDisplay(value, format, isInteger);
+  useEffect(() => {
+    if (!focused) setDraft(null);
+  }, [value, focused]);
+
+  const displayValue =
+    focused && draft !== null
+      ? draft
+      : formatDisplay(value, format, isInteger);
 
   function handleChange(e: React.ChangeEvent<HTMLInputElement>) {
     const raw = e.target.value.replace(/[^0-9.-]/g, '');
+    setDraft(raw);
+    if (raw === '' || raw === '-') return;
     const num = isInteger ? parseInt(raw, 10) : parseFloat(raw);
-    if (!isNaN(num)) onChange(num);
-    else if (raw === '' || raw === '-') onChange(0);
+    if (!isNaN(num)) {
+      const clamped = min !== undefined && num < min ? min : num;
+      onChange(clamped);
+    }
+  }
+
+  function handleFocus() {
+    setFocused(true);
+    setDraft(value === 0 ? '' : isInteger ? String(Math.round(value)) : String(value));
+  }
+
+  function handleBlur() {
+    if (draft === '' || draft === '-') onChange(0);
+    setFocused(false);
+    setDraft(null);
   }
 
   return (
@@ -48,8 +69,8 @@ export default function NumInput({
       inputMode="numeric"
       value={displayValue}
       onChange={handleChange}
-      onFocus={() => setFocused(true)}
-      onBlur={() => setFocused(false)}
+      onFocus={handleFocus}
+      onBlur={handleBlur}
       min={min}
       step={step}
       className={className}

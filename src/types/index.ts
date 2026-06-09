@@ -93,6 +93,8 @@ export interface PhieuGiaoHangChiTiet {
   don_vi: string;
   so_luong_giao: number;
   gia_hop_dong?: number;
+  gia_ban_thuc_te?: number;
+  thue_suat?: number;
   so_luong_hop_dong?: number;
   ghi_chu?: string;
 }
@@ -252,6 +254,7 @@ export type TrangThaiHopDong = 'Hieu luc' | 'Thanh ly' | 'Huy';
 // ─── New cashflow system ──────────────────────────────────────────────────────
 
 export type LoaiGiaoDich = 'thu' | 'chi' | 'chuyen_khoan_noi_bo' | 'dieu_chinh_so_du';
+export type ChieuTien = 'thu' | 'chi';
 export type PhamViTaiKhoan = 'cong_ty' | 'ca_nhan' | 'dung_chung';
 export type PhamViHangMuc = 'cong_ty' | 'ca_nhan' | 'oto' | 'vay_no' | 'khac';
 
@@ -308,6 +311,8 @@ export interface DongTienMoi {
   ngay_giao_dich: string;
   ngay_hach_toan?: string;
   loai_giao_dich: LoaiGiaoDich;
+  /** Thu/chi đối với tai_khoan_tien_id khi loai_giao_dich = chuyen_khoan_noi_bo */
+  chieu_tien?: ChieuTien | null;
   tai_khoan_tien_id: number;
   tai_khoan_nhan_id?: number | null;
   so_tien: number;
@@ -323,6 +328,7 @@ export interface DongTienMoi {
   so_du_sau_giao_dich?: number | null;
   nguon_du_lieu?: string;
   ma_tham_chieu?: string;
+  ma_giao_dich_ngan_hang?: string | null;
   ghi_chu?: string;
   trang_thai: 'hoan_thanh' | 'cho_doi_soat' | 'loi';
   created_at?: string;

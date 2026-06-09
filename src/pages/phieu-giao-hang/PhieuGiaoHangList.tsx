@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { phieuGiaoHangApi, khachHangApi, hopDongApi } from '../../lib/api';
+import { phieuGiaoHangApi, hopDongApi } from '../../lib/api';
 import { useToastStore } from '../../store/toast';
 import { useAuthStore } from '../../store/auth';
 import { useNavigate, Link } from 'react-router-dom';
@@ -11,11 +11,14 @@ import {
   generateSoPhieu,
 } from '../../lib/utils';
 import SearchInput from '../../components/ui/SearchInput';
+import KhachHangFilterField from '../../components/shared/KhachHangFilterField';
+import HopDongFilterField from '../../components/shared/HopDongFilterField';
 import Pagination from '../../components/ui/Pagination';
 import ConfirmDialog from '../../components/ui/ConfirmDialog';
 import EmptyState from '../../components/ui/EmptyState';
 import NumInput from '../../components/ui/NumInput';
-import { Plus, Trash2, Truck, X, ArrowLeft, Save, Search, PackageCheck } from 'lucide-react';
+import { buildDaGiaoMapFromPhieuList } from '../../lib/hopDongGiaoHang';
+import { Plus, Trash2, Truck, X, ArrowLeft, Save, PackageCheck } from 'lucide-react';
 import type { PhieuGiaoHang, KhachHang, HopDong, HopDongChiTiet } from '../../types';
 
 const PAGE_SIZE = 10;
@@ -48,8 +51,6 @@ export default function PhieuGiaoHangList() {
   const [currentPage, setCurrentPage] = useState(1);
   const [totalCount, setTotalCount] = useState(0);
 
-  const [khachHangList, setKhachHangList] = useState<KhachHang[]>([]);
-  const [hopDongList, setHopDongList] = useState<HopDong[]>([]);
   const [filterKhachHang, setFilterKhachHang] = useState('');
   const [filterHopDong, setFilterHopDong] = useState('');
   const [filterDateFrom, setFilterDateFrom] = useState('');
@@ -68,38 +69,9 @@ export default function PhieuGiaoHangList() {
   const [lineItems, setLineItems] = useState<LineItem[]>([]);
   const [loadingHD, setLoadingHD] = useState(false);
 
-  // KH search dropdown
-  const [khSearch, setKhSearch] = useState('');
-  const [khResults, setKhResults] = useState<KhachHang[]>([]);
-  const [khDropOpen, setKhDropOpen] = useState(false);
-  const [khachHangName, setKhachHangName] = useState('');
-
-  const [filteredHopDongList, setFilteredHopDongList] = useState<HopDong[]>([]);
   const [deleteTarget, setDeleteTarget] = useState<PhieuGiaoHangRow | null>(null);
 
   const totalPages = Math.ceil(totalCount / PAGE_SIZE);
-
-  const filteredHopDongForFilter = filterKhachHang
-    ? hopDongList.filter((hd) => String(hd.khach_hang_id) === filterKhachHang)
-    : hopDongList;
-
-  useEffect(() => {
-    khachHangApi.list({ limit: 1000 }).then((res) => {
-      setKhachHangList(res.data as KhachHang[]);
-    });
-    hopDongApi.list({ limit: 1000 }).then((res) => {
-      setHopDongList(res.data as HopDong[]);
-    });
-  }, []);
-
-  useEffect(() => {
-    if (khachHangId) {
-      setFilteredHopDongList(hopDongList.filter((hd) => String(hd.khach_hang_id) === khachHangId));
-    } else {
-      setFilteredHopDongList([]);
-      setHopDongId('');
-    }
-  }, [khachHangId, hopDongList]);
 
   // Load hop dong chi tiet + da giao when hop dong selected
   useEffect(() => {
@@ -116,14 +88,7 @@ export default function PhieuGiaoHangList() {
       const chiTietHD: HopDongChiTiet[] = hdFull?.chi_tiet || [];
       const phieuList: any[] = pghRes.data || [];
 
-      // Aggregate delivered quantities per hop_dong_chi_tiet_id (or by name match)
-      const daGiaoMap: Record<number, number> = {};
-      for (const phieu of phieuList) {
-        for (const ct of (phieu.chi_tiet || [])) {
-          const ref = ct.hop_dong_chi_tiet_id;
-          if (ref) daGiaoMap[ref] = (daGiaoMap[ref] || 0) + (ct.so_luong_giao || 0);
-        }
-      }
+      const daGiaoMap = buildDaGiaoMapFromPhieuList(phieuList);
 
       const rows: LineItem[] = chiTietHD.map((ct) => {
         const daGiao = ct.id ? (daGiaoMap[ct.id] || 0) : 0;
@@ -158,7 +123,13 @@ export default function PhieuGiaoHangList() {
         page: currentPage,
         limit: PAGE_SIZE,
       });
-      setData((res.data || []).map((r: any) => ({ ...r, khach_hang: r.khach_hang, hop_dong: r.hop_dong })));
+      setData(
+        (res.data || []).map((r: any) => ({
+          ...r,
+          khach_hang: r.khach_hang ?? (r.ten_cong_ty ? { ten_cong_ty: r.ten_cong_ty } : undefined),
+          hop_dong: r.hop_dong ?? (r.so_hop_dong ? { id: r.hop_dong_id, so_hop_dong: r.so_hop_dong } : undefined),
+        }))
+      );
       setTotalCount(res.total || 0);
     } catch {
       addToast('error', 'Không thể tải danh sách phiếu giao hàng');
@@ -174,19 +145,10 @@ export default function PhieuGiaoHangList() {
     setSoPhieu(generateSoPhieu());
     setNgayGiao(getTodayInputValue());
     setKhachHangId('');
-    setKhachHangName('');
-    setKhSearch('');
     setHopDongId('');
     setNoiDung('');
     setLineItems([]);
     setShowForm(true);
-  }
-
-  function searchKhachHang(q: string) {
-    const lower = q.toLowerCase();
-    setKhResults(
-      khachHangList.filter((kh) => kh.ten_cong_ty?.toLowerCase().includes(lower)).slice(0, 10)
-    );
   }
 
   function updateLine(key: string, field: keyof LineItem, value: number | string) {
@@ -200,19 +162,6 @@ export default function PhieuGiaoHangList() {
     }));
   }
 
-  function addManualLine() {
-    setLineItems((prev) => [...prev, {
-      key: crypto.randomUUID(),
-      ten_san_pham: '',
-      don_vi: '',
-      so_luong_hop_dong: 0,
-      da_giao: 0,
-      con_lai: 0,
-      so_luong_giao: 0,
-      ghi_chu: '',
-    }]);
-  }
-
   function removeLine(key: string) {
     setLineItems((prev) => prev.filter((i) => i.key !== key));
   }
@@ -220,8 +169,12 @@ export default function PhieuGiaoHangList() {
   async function handleCreate() {
     if (!khachHangId) { addToast('warning', 'Vui lòng chọn khách hàng'); return; }
     if (!ngayGiao) { addToast('warning', 'Vui lòng chọn ngày giao'); return; }
-    const validItems = lineItems.filter((i) => i.ten_san_pham.trim() && i.so_luong_giao > 0);
-    if (validItems.length === 0) { addToast('warning', 'Vui lòng nhập ít nhất một sản phẩm với số lượng giao > 0'); return; }
+    if (!hopDongId) { addToast('warning', 'Vui lòng chọn hợp đồng'); return; }
+    const validItems = lineItems.filter((i) => i.hop_dong_chi_tiet_id && i.so_luong_giao > 0);
+    if (validItems.length === 0) {
+      addToast('warning', 'Vui lòng nhập số lượng giao cho ít nhất một dòng hợp đồng');
+      return;
+    }
 
     setSaving(true);
     try {
@@ -294,62 +247,35 @@ export default function PhieuGiaoHangList() {
               <label className="block text-xs font-semibold text-gray-600 mb-1">Ngày giao <span className="text-red-500">*</span></label>
               <input type="date" value={ngayGiao} onChange={(e) => setNgayGiao(e.target.value)} className="input-field text-sm w-full" />
             </div>
-            <div className="relative lg:col-span-2">
+            <div className="lg:col-span-2">
               <label className="block text-xs font-semibold text-gray-600 mb-1">Khách hàng <span className="text-red-500">*</span></label>
-              <div className="relative">
-                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
-                <input
-                  type="text"
-                  value={khSearch}
-                  onChange={(e) => {
-                    setKhSearch(e.target.value);
-                    if (khachHangId && e.target.value !== khachHangName) { setKhachHangId(''); setKhachHangName(''); }
-                    setKhDropOpen(true);
-                    searchKhachHang(e.target.value);
-                  }}
-                  onFocus={() => { setKhDropOpen(true); if (!khachHangId) searchKhachHang(khSearch); }}
-                  className="input-field text-sm pl-7 pr-7 w-full"
-                  placeholder="Tìm khách hàng..."
-                />
-                {khSearch && (
-                  <button type="button" onClick={() => { setKhSearch(''); setKhachHangId(''); setKhachHangName(''); setKhResults([]); setHopDongId(''); setLineItems([]); }}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
-                    <X className="w-3.5 h-3.5" />
-                  </button>
-                )}
-              </div>
-              {khDropOpen && (khResults.length > 0) && (
-                <div className="absolute z-50 top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-y-auto">
-                  {khResults.map((kh) => (
-                    <button key={kh.id} type="button"
-                      className="w-full text-left px-3 py-2 text-sm hover:bg-blue-50 transition-colors"
-                      onClick={() => { setKhachHangId(String(kh.id)); setKhachHangName(kh.ten_cong_ty); setKhSearch(kh.ten_cong_ty); setKhDropOpen(false); }}>
-                      {kh.ten_cong_ty}
-                    </button>
-                  ))}
-                </div>
-              )}
-              {khachHangId && <p className="mt-1 text-xs text-green-600 font-medium">&#10003; {khachHangName}</p>}
+              <KhachHangFilterField
+                value={khachHangId}
+                onChange={(id) => {
+                  setKhachHangId(id);
+                  setHopDongId('');
+                  setLineItems([]);
+                }}
+                placeholder="Tìm khách hàng..."
+                className="w-full"
+              />
             </div>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-4">
             <div>
-              <label className="block text-xs font-semibold text-gray-600 mb-1">Hợp đồng</label>
-              <select
+              <label className="block text-xs font-semibold text-gray-600 mb-1">
+                Hợp đồng <span className="text-red-500">*</span>
+              </label>
+              <HopDongFilterField
                 value={hopDongId}
-                onChange={(e) => setHopDongId(e.target.value)}
-                className="select-field text-sm w-full"
-                disabled={!khachHangId}
-              >
-                <option value="">-- Chọn hợp đồng để kế thừa --</option>
-                {filteredHopDongList.map((hd) => (
-                  <option key={hd.id} value={hd.id}>
-                    {hd.so_hop_dong}{hd.ten_du_an ? ` - ${hd.ten_du_an}` : ''}
-                  </option>
-                ))}
-              </select>
-              {!khachHangId && <p className="mt-1 text-xs text-gray-400">Chọn khách hàng trước</p>}
+                onChange={setHopDongId}
+                khachHangId={khachHangId}
+                chiConHang
+                requireKhachHang
+                placeholder="Tìm hợp đồng còn hàng cần giao..."
+                className="w-full"
+              />
             </div>
             <div>
               <label className="block text-xs font-semibold text-gray-600 mb-1">Nội dung</label>
@@ -363,13 +289,8 @@ export default function PhieuGiaoHangList() {
         <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
           <div className="flex items-center justify-between px-5 py-3 border-b border-gray-100">
             <h2 className="text-sm font-bold text-gray-800 uppercase tracking-wide">Chi tiết sản phẩm giao</h2>
-            {loadingHD ? (
+            {loadingHD && (
               <span className="text-xs text-gray-400 animate-pulse">Đang tải hợp đồng...</span>
-            ) : (
-              <button type="button" onClick={addManualLine}
-                className="flex items-center gap-1 text-xs font-semibold text-blue-600 hover:text-blue-700 px-3 py-1.5 rounded-lg hover:bg-blue-50 transition-colors border border-blue-200">
-                <Plus className="w-3.5 h-3.5" /> Thêm dòng
-              </button>
             )}
           </div>
 
@@ -377,8 +298,6 @@ export default function PhieuGiaoHangList() {
             <div className="flex flex-col items-center justify-center py-14 text-gray-400">
               <PackageCheck className="w-10 h-10 mb-3 opacity-30" />
               <p className="text-sm">{hopDongId ? 'Hợp đồng không có sản phẩm' : 'Chọn hợp đồng để tự động điền sản phẩm'}</p>
-              <button type="button" onClick={addManualLine}
-                className="mt-3 text-xs text-blue-600 hover:underline">hoặc thêm dòng thủ công</button>
             </div>
           ) : (
             <div className="overflow-x-auto">
@@ -516,19 +435,23 @@ export default function PhieuGiaoHangList() {
           </div>
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">Khách hàng</label>
-            <select value={filterKhachHang} onChange={(e) => { setFilterKhachHang(e.target.value); setFilterHopDong(''); }} className="select-field">
-              <option value="">Tất cả</option>
-              {khachHangList.map((kh) => <option key={kh.id} value={kh.id}>{kh.ten_cong_ty}</option>)}
-            </select>
+            <KhachHangFilterField
+              value={filterKhachHang}
+              onChange={(id) => {
+                setFilterKhachHang(id);
+                setFilterHopDong('');
+              }}
+              placeholder="Tìm khách hàng..."
+            />
           </div>
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">Hợp đồng</label>
-            <select value={filterHopDong} onChange={(e) => setFilterHopDong(e.target.value)} className="select-field">
-              <option value="">Tất cả</option>
-              {filteredHopDongForFilter.map((hd) => (
-                <option key={hd.id} value={hd.id}>{hd.so_hop_dong}{hd.ten_du_an ? ` - ${hd.ten_du_an}` : ''}</option>
-              ))}
-            </select>
+            <HopDongFilterField
+              value={filterHopDong}
+              onChange={setFilterHopDong}
+              khachHangId={filterKhachHang}
+              placeholder="Tìm số hợp đồng, dự án..."
+            />
           </div>
           {(filterKhachHang || filterHopDong || filterDateFrom || filterDateTo) && (
             <button onClick={() => { setFilterKhachHang(''); setFilterHopDong(''); setFilterDateFrom(''); setFilterDateTo(''); }} className="btn-secondary text-sm">

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { hopDongApi, khachHangApi, baoGiaApi } from '../../lib/api';
 import { useToastStore } from '../../store/toast';
 import {
@@ -10,42 +10,38 @@ import {
   calcTongTruocVAT,
   calcTongVAT,
   calcTongThanhToan,
+  applyVanChuyenToChiTiet,
+  giaBanChuaVanChuyenFromBg,
+  calcLaiPhanTramTuGiaBan,
+  giaBanThuanChoLoiNhuan,
+  calcLoiNhuanGop,
+  todayVN,
+  isoToVN,
+  vnToISO,
+  isValidVNDate,
+  parseTSV,
+  isChiTietRowTrong,
+  namTuNgay,
+  trangThaiHopDongLabel,
 } from '../../lib/utils';
-import { Save, Plus, Trash2, ClipboardList, Search, X } from 'lucide-react';
+import { Save, Plus, Trash2, ClipboardList, ClipboardPaste, FileSpreadsheet, RefreshCw, Search, X } from 'lucide-react';
+import ChiTietSttCell from '../../components/shared/ChiTietSttCell';
+import LoiNhuanGopSummary from '../../components/shared/LoiNhuanGopSummary';
+import KhachHangFilterField from '../../components/shared/KhachHangFilterField';
 import NumInput from '../../components/ui/NumInput';
+import VnDateInput from '../../components/ui/VnDateInput';
+import {
+  EntityFormMetaSection,
+  EntityFormMetaRow,
+  EntityFormField,
+} from '../../components/shared/EntityFormMeta';
 import type { KhachHang, HopDong, HopDongChiTiet, BaoGia } from '../../types';
-
-// ---- Date helpers (dd/mm/yyyy) ----
-function todayVN(): string {
-  const d = new Date();
-  return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
-}
-
-function isoToVN(iso: string | null | undefined): string {
-  if (!iso) return todayVN();
-  const s = iso.includes('T') ? iso.split('T')[0] : iso;
-  const [y, m, dd] = s.split('-');
-  if (!y || !m || !dd) return todayVN();
-  return `${dd}/${m}/${y}`;
-}
-
-function vnToISO(vn: string): string {
-  const parts = vn.split('/');
-  if (parts.length === 3) {
-    const [dd, mm, yyyy] = parts;
-    if (dd && mm && yyyy && yyyy.length === 4) return `${yyyy}-${mm}-${dd}`;
-  }
-  return vn;
-}
-
-function isValidVNDate(s: string): boolean {
-  return /^\d{2}\/\d{2}\/\d{4}$/.test(s);
-}
 
 interface ChiTietRow extends HopDongChiTiet {
   tempId: string;
   isNew: boolean;
   deleted?: boolean;
+  gia_ban_chua_van_chuyen?: number;
 }
 
 interface HopDongFormProps {
@@ -66,11 +62,129 @@ interface HopDongFormProps {
   onCancel: () => void;
 }
 
-const toChiTietRow = (ct: HopDongChiTiet): ChiTietRow => ({
-  ...ct,
-  tempId: ct.id ? `existing-${ct.id}` : crypto.randomUUID(),
-  isNew: !ct.id,
-});
+const toChiTietRow = (ct: HopDongChiTiet): ChiTietRow => {
+  const giaChua = Number((ct as ChiTietRow).gia_ban_chua_van_chuyen) || Number(ct.gia_ban_thuc_te) || 0;
+  return {
+    ...ct,
+    gia_ban_chua_van_chuyen: giaChua,
+    gia_ban_thuc_te: giaChua,
+    tempId: ct.id ? `existing-${ct.id}` : crypto.randomUUID(),
+    isNew: !ct.id,
+  };
+};
+
+function buildChiTietRowFromBaoGia(ct: any): ChiTietRow {
+  const giaChua = giaBanChuaVanChuyenFromBg(ct);
+  const giaBanBg = Number(ct.gia_ban_thuc_te) || giaChua;
+  const soLuong = Number(ct.so_luong) || 1;
+  const gv = Number(ct.don_gia_von) || 0;
+  const lai = gv > 0 ? calcLaiPhanTramTuGiaBan(giaBanBg, gv) : Number(ct.lai_suat_phan_tram) || 5;
+
+  return {
+    tempId: crypto.randomUUID(),
+    isNew: true,
+    ten_san_pham: ct.ten_san_pham || '',
+    don_vi: ct.don_vi || '',
+    so_luong: soLuong,
+    don_gia_von: gv,
+    lai_suat_phan_tram: lai,
+    gia_ban_chua_van_chuyen: giaChua,
+    gia_ban_thuc_te: giaChua,
+    thue_suat: Number(ct.thue_suat) || 10,
+    chenh_lech_phan_tram: 0,
+    gia_hop_dong: giaBanBg,
+  };
+}
+
+function roundGia1K(value: number): number {
+  return Math.round(value / 1000) * 1000;
+}
+
+function giaHopDongFromBanVaChenh(giaBanCoVc: number, chenhPct: number): number {
+  return roundGia1K(calcGiaBanGoiY(giaBanCoVc, Number(chenhPct) || 0));
+}
+
+function rowsForVanChuyen(rows: ChiTietRow[]): ChiTietRow[] {
+  return rows.map((r) => ({
+    ...r,
+    gia_ban_chua_van_chuyen: r.gia_ban_chua_van_chuyen ?? r.gia_ban_thuc_te ?? 0,
+  }));
+}
+
+function getGiaBanCoVcForRow(
+  row: ChiTietRow,
+  activeRows: ChiTietRow[],
+  cheDo: number,
+  phi: number
+): number {
+  const vcRow = applyVanChuyenToChiTiet(rowsForVanChuyen(activeRows), cheDo, phi).find(
+    (x) => x.tempId === row.tempId
+  );
+  return vcRow?.gia_ban_thuc_te ?? (Number(row.gia_ban_chua_van_chuyen) || 0);
+}
+
+/** Từ giá bán đã gồm VC (chế độ phân bổ) suy ra giá chưa VC. */
+function giaChuaTuGiaBanCoVc(
+  targetBanCoVc: number,
+  row: ChiTietRow,
+  activeRows: ChiTietRow[],
+  cheDo: number,
+  phi: number
+): number {
+  const target = roundGia1K(Math.max(0, Number(targetBanCoVc) || 0));
+  if (cheDo !== 1 || phi <= 0) return target;
+
+  let giaChua = target;
+  for (let i = 0; i < 5; i++) {
+    const rows = activeRows.map((r) => {
+      const base =
+        r.tempId === row.tempId
+          ? giaChua
+          : Number(r.gia_ban_chua_van_chuyen ?? r.gia_ban_thuc_te) || 0;
+      return { ...r, gia_ban_chua_van_chuyen: base, gia_ban_thuc_te: base };
+    });
+    const vcRow = applyVanChuyenToChiTiet(rows, cheDo, phi).find((x) => x.tempId === row.tempId);
+    if (!vcRow) break;
+    const vcDon = Number(vcRow.chi_phi_van_chuyen_phan_bo) || 0;
+    const next = roundGia1K(Math.max(0, target - vcDon));
+    if (next === giaChua) break;
+    giaChua = next;
+  }
+  return giaChua;
+}
+
+function getGiaBanChoTinhLai(
+  row: ChiTietRow,
+  activeRows: ChiTietRow[],
+  cheDo: number,
+  phi: number
+): number {
+  if (cheDo === 1) {
+    return giaBanThuanChoLoiNhuan(
+      {
+        gia_ban_chua_van_chuyen: row.gia_ban_chua_van_chuyen,
+        gia_ban_thuc_te: row.gia_ban_thuc_te,
+      },
+      1
+    );
+  }
+  return getGiaBanCoVcForRow(row, activeRows, cheDo, phi);
+}
+
+/** Lãi % = (giá bán thuần − giá vốn) / giá vốn; chế độ phân bổ: giá thuần = giá chưa VC. */
+function syncLaiTuGiaBan(
+  row: ChiTietRow,
+  activeRows: ChiTietRow[],
+  cheDo: number,
+  phi: number
+): ChiTietRow {
+  const giaBan = getGiaBanChoTinhLai(row, activeRows, cheDo, phi);
+  const gv = Number(row.don_gia_von) || 0;
+  return {
+    ...row,
+    lai_suat_phan_tram: gv > 0 ? calcLaiPhanTramTuGiaBan(giaBan, gv) : row.lai_suat_phan_tram ?? 0,
+  };
+}
 
 const emptyChiTiet = (): ChiTietRow => ({
   tempId: crypto.randomUUID(),
@@ -80,6 +194,7 @@ const emptyChiTiet = (): ChiTietRow => ({
   so_luong: 1,
   don_gia_von: 0,
   lai_suat_phan_tram: 5,
+  gia_ban_chua_van_chuyen: 0,
   gia_ban_thuc_te: 0,
   thue_suat: 10,
   chenh_lech_phan_tram: 0,
@@ -100,6 +215,7 @@ export default function HopDongForm({ mode, hopDongId, initialData, fromBaoGia, 
   const [phiVanChuyen, setPhiVanChuyen] = useState(0);
   const [moTaNoiDung, setMoTaNoiDung] = useState('');
   const [tenFolder, setTenFolder] = useState('');
+  const [trangThai, setTrangThai] = useState('Hieu luc');
 
   // KH search dropdown
   const [khSearch, setKhSearch] = useState('');
@@ -110,11 +226,14 @@ export default function HopDongForm({ mode, hopDongId, initialData, fromBaoGia, 
 
   const [chiTiet, setChiTiet] = useState<ChiTietRow[]>([emptyChiTiet()]);
   const [saving, setSaving] = useState(false);
+  const [showExcelPaste, setShowExcelPaste] = useState(false);
+  const [excelText, setExcelText] = useState('');
+  const excelTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const phiVCNum = Number(phiVanChuyen) || 0;
 
   // Inherit from bao gia modal
   const [showInheritModal, setShowInheritModal] = useState(false);
   const [inheritKhachHangFilter, setInheritKhachHangFilter] = useState('');
-  const [inheritKhachHangList, setInheritKhachHangList] = useState<KhachHang[]>([]);
   const [inheritBaoGiaList, setInheritBaoGiaList] = useState<(BaoGia & { ten_cong_ty?: string })[]>([]);
   const [inheritLoading, setInheritLoading] = useState(false);
 
@@ -139,11 +258,18 @@ export default function HopDongForm({ mode, hopDongId, initialData, fromBaoGia, 
       try {
         const res = await khachHangApi.list({ search: q.trim(), limit: 20 });
         setKhResults((res.data as KhachHang[]) || []);
+      } catch (err) {
+        console.error('Loi tim khach hang:', err);
+        setKhResults([]);
+        addToast(
+          'error',
+          err instanceof Error ? err.message : 'Không thể tìm khách hàng. Kiểm tra kết nối API / SSH tunnel.'
+        );
       } finally {
         setKhSearching(false);
       }
     }, 250);
-  }, []);
+  }, [addToast]);
 
   useEffect(() => {
     if (mode === 'create' && fromBaoGia) {
@@ -153,34 +279,8 @@ export default function HopDongForm({ mode, hopDongId, initialData, fromBaoGia, 
       setKhSearch(fromBaoGia.ten_cong_ty);
       setTenDuAn(fromBaoGia.ten_du_an);
       setCheDoVanChuyen(fromBaoGia.che_do_van_chuyen);
-      setPhiVanChuyen(fromBaoGia.phi_van_chuyen);
-      const cheDoVC = Number(fromBaoGia.che_do_van_chuyen);
-      const phiVC = Number(fromBaoGia.phi_van_chuyen) || 0;
-      const ctList = fromBaoGia.chi_tiet;
-      const tongChuaVC = ctList.reduce((s: number, ct: any) => s + (Number(ct.so_luong) || 1) * (Number(ct.gia_ban_chua_van_chuyen) || Number(ct.gia_ban_co_ban) || Number(ct.gia_ban_thuc_te) || 0), 0);
-      const rows: ChiTietRow[] = ctList.map((ct: any) => {
-        const giaChuaVC = Number(ct.gia_ban_chua_van_chuyen) || Number(ct.gia_ban_co_ban) || Number(ct.gia_ban_thuc_te) || 0;
-        const soLuong = Number(ct.so_luong) || 1;
-        const chiPhiVC = Number(ct.chi_phi_van_chuyen_phan_bo) > 0
-          ? Number(ct.chi_phi_van_chuyen_phan_bo)
-          : (cheDoVC === 1 && phiVC > 0 && tongChuaVC > 0 && soLuong > 0
-            ? Math.round((phiVC * (soLuong * giaChuaVC) / tongChuaVC) / soLuong / 1000) * 1000
-            : 0);
-        const giaHopDong = giaChuaVC + chiPhiVC;
-        return {
-          tempId: crypto.randomUUID(),
-          isNew: true,
-          ten_san_pham: ct.ten_san_pham || '',
-          don_vi: ct.don_vi || '',
-          so_luong: soLuong,
-          don_gia_von: Number(ct.don_gia_von) || 0,
-          lai_suat_phan_tram: Number(ct.lai_suat_phan_tram) || 5,
-          gia_ban_thuc_te: giaChuaVC,
-          thue_suat: Number(ct.thue_suat) || 10,
-          chenh_lech_phan_tram: giaChuaVC > 0 ? Math.round(((giaHopDong - giaChuaVC) / giaChuaVC) * 100 * 100) / 100 : 0,
-          gia_hop_dong: giaHopDong,
-        };
-      });
+      setPhiVanChuyen(Number(fromBaoGia.phi_van_chuyen) || 0);
+      const rows: ChiTietRow[] = (fromBaoGia.chi_tiet || []).map(buildChiTietRowFromBaoGia);
       setChiTiet(rows.length > 0 ? rows : [emptyChiTiet()]);
     } else if (mode === 'create') {
       setSoHopDong(generateSoHopDong());
@@ -188,15 +288,6 @@ export default function HopDongForm({ mode, hopDongId, initialData, fromBaoGia, 
       populateFromData(initialData);
     }
   }, [mode, initialData, fromBaoGia]);
-
-  // Load khach hang list for inherit modal filter
-  useEffect(() => {
-    if (showInheritModal && inheritKhachHangList.length === 0) {
-      khachHangApi.list({ limit: 1000 }).then((res) => {
-        setInheritKhachHangList((res.data as KhachHang[]) || []);
-      });
-    }
-  }, [showInheritModal]);
 
   // Load bao gia when filter changes
   useEffect(() => {
@@ -214,20 +305,6 @@ export default function HopDongForm({ mode, hopDongId, initialData, fromBaoGia, 
     });
   }, [showInheritModal, inheritKhachHangFilter]);
 
-  function recalcDerivedFields(ct: HopDongChiTiet): ChiTietRow {
-    const row = toChiTietRow(ct);
-    const gv = Number(row.don_gia_von) || 0;
-    const giaBan = Number(row.gia_ban_thuc_te) || 0;
-    const giaHD = Number(row.gia_hop_dong) || 0;
-    if (gv > 0 && giaBan > 0) {
-      row.lai_suat_phan_tram = Math.round(((giaBan - gv) / gv) * 100 * 100) / 100;
-    }
-    if (giaBan > 0 && giaHD > 0) {
-      row.chenh_lech_phan_tram = Math.round(((giaHD - giaBan) / giaBan) * 100 * 100) / 100;
-    }
-    return row;
-  }
-
   function populateFromData(hd: HopDong & { chi_tiet?: HopDongChiTiet[] }) {
     setKhachHangId(String(hd.khach_hang_id));
     setKhachHangName((hd as any).ten_cong_ty || (hd as any).khach_hang?.ten_cong_ty || '');
@@ -235,11 +312,24 @@ export default function HopDongForm({ mode, hopDongId, initialData, fromBaoGia, 
     setSoHopDong(hd.so_hop_dong || '');
     setNgayHopDong(isoToVN(hd.ngay_hop_dong as string));
     setTenDuAn(hd.ten_du_an || '');
-    setCheDoVanChuyen(hd.che_do_van_chuyen ?? 0);
-    setPhiVanChuyen(hd.phi_van_chuyen ?? 0);
+    const cheDo = hd.che_do_van_chuyen ?? 0;
+    const phi = Number(hd.phi_van_chuyen) || 0;
+    setCheDoVanChuyen(cheDo);
+    setPhiVanChuyen(phi);
     setMoTaNoiDung(hd.mo_ta_noi_dung || '');
     setTenFolder((hd as any).ten_folder_du_an || '');
-    const rows = ((hd.chi_tiet as HopDongChiTiet[]) || []).map(recalcDerivedFields);
+    setTrangThai(hd.trang_thai || 'Hieu luc');
+    const baseRows = ((hd.chi_tiet as HopDongChiTiet[]) || []).map(toChiTietRow);
+    const rowsSynced = baseRows.map((row) => syncLaiTuGiaBan(row, baseRows, cheDo, phi));
+    const rows = rowsSynced.map((r) => {
+      const giaBanCoVc = getGiaBanCoVcForRow(r, baseRows, cheDo, phi);
+      const giaHD = Number(r.gia_hop_dong) || giaHopDongFromBanVaChenh(giaBanCoVc, Number(r.chenh_lech_phan_tram) || 0);
+      const chenh =
+        giaBanCoVc > 0
+          ? Math.round(((giaHD - giaBanCoVc) / giaBanCoVc) * 100 * 100) / 100
+          : Number(r.chenh_lech_phan_tram) || 0;
+      return { ...r, chenh_lech_phan_tram: chenh };
+    });
     setChiTiet(rows.length > 0 ? rows : [emptyChiTiet()]);
   }
 
@@ -247,34 +337,7 @@ export default function HopDongForm({ mode, hopDongId, initialData, fromBaoGia, 
     try {
       const res = await baoGiaApi.get(bg.id);
       const bgFull = res.data as any;
-      const bgChiTiet = bgFull.chi_tiet || [];
-      const cheDoVC = Number(bgFull.che_do_van_chuyen) || 0;
-      const phiVC = Number(bgFull.phi_van_chuyen) || 0;
-      const tongChuaVC = bgChiTiet.reduce((s: number, ct: any) => s + (Number(ct.so_luong) || 1) * (Number(ct.gia_ban_chua_van_chuyen) || Number(ct.gia_ban_co_ban) || Number(ct.gia_ban_thuc_te) || 0), 0);
-
-      const rows: ChiTietRow[] = bgChiTiet.map((ct: any) => {
-        const giaChuaVC = Number(ct.gia_ban_chua_van_chuyen) || Number(ct.gia_ban_co_ban) || Number(ct.gia_ban_thuc_te) || 0;
-        const soLuong = Number(ct.so_luong) || 1;
-        const chiPhiVC = Number(ct.chi_phi_van_chuyen_phan_bo) > 0
-          ? Number(ct.chi_phi_van_chuyen_phan_bo)
-          : (cheDoVC === 1 && phiVC > 0 && tongChuaVC > 0 && soLuong > 0
-            ? Math.round((phiVC * (soLuong * giaChuaVC) / tongChuaVC) / soLuong / 1000) * 1000
-            : 0);
-        const giaHopDong = giaChuaVC + chiPhiVC;
-        return {
-          tempId: crypto.randomUUID(),
-          isNew: true,
-          ten_san_pham: ct.ten_san_pham || '',
-          don_vi: ct.don_vi || '',
-          so_luong: soLuong,
-          don_gia_von: Number(ct.don_gia_von) || 0,
-          lai_suat_phan_tram: Number(ct.lai_suat_phan_tram) || 5,
-          gia_ban_thuc_te: giaChuaVC,
-          thue_suat: Number(ct.thue_suat) || 10,
-          chenh_lech_phan_tram: giaChuaVC > 0 ? Math.round(((giaHopDong - giaChuaVC) / giaChuaVC) * 100 * 100) / 100 : 0,
-          gia_hop_dong: giaHopDong,
-        };
-      });
+      const rows: ChiTietRow[] = (bgFull.chi_tiet || []).map(buildChiTietRowFromBaoGia);
 
       if (rows.length > 0) {
         setChiTiet(rows);
@@ -287,7 +350,7 @@ export default function HopDongForm({ mode, hopDongId, initialData, fromBaoGia, 
         }
         if (!tenDuAn && bgFull.ten_du_an) setTenDuAn(bgFull.ten_du_an);
         setCheDoVanChuyen(bgFull.che_do_van_chuyen ?? 0);
-        setPhiVanChuyen(bgFull.phi_van_chuyen ?? 0);
+        setPhiVanChuyen(Number(bgFull.phi_van_chuyen) || 0);
         addToast('success', `Đã kế thừa ${rows.length} sản phẩm từ báo giá ${bg.so_bao_gia}`);
       } else {
         addToast('warning', 'Báo giá này không có sản phẩm');
@@ -298,15 +361,76 @@ export default function HopDongForm({ mode, hopDongId, initialData, fromBaoGia, 
     setShowInheritModal(false);
   }
 
+  function insertRowBefore(beforeTempId: string) {
+    const newRow = emptyChiTiet();
+    setChiTiet((prev) => {
+      const idx = prev.findIndex((r) => r.tempId === beforeTempId);
+      if (idx < 0) return prev;
+      const next = [...prev];
+      next.splice(idx, 0, newRow);
+      return next;
+    });
+  }
+
   function insertRowAfter(afterTempId: string | null) {
     const newRow = emptyChiTiet();
     setChiTiet((prev) => {
       if (afterTempId === null) return [newRow, ...prev];
       const idx = prev.findIndex((r) => r.tempId === afterTempId);
+      if (idx < 0) return [...prev, newRow];
       const next = [...prev];
       next.splice(idx + 1, 0, newRow);
       return next;
     });
+  }
+
+  function handlePasteFromExcel() {
+    if (!excelText.trim()) {
+      addToast('warning', 'Vui lòng dán dữ liệu từ Excel vào ô trên');
+      return;
+    }
+    const records = parseTSV(excelText.trim()).filter((cols) => cols.some((c) => c.trim()));
+    const rows: ChiTietRow[] = [];
+    for (const cols of records) {
+      const tenSanPham = cols[0]?.trim().replace(/\n/g, ' ').replace(/\s+/g, ' ') || '';
+      if (!tenSanPham) continue;
+      const donVi = (cols[2] || '').trim();
+      const soLuongRaw = (cols[3] || '1').trim().replace(/[^0-9.,]/g, '').replace(/\./g, '').replace(',', '.');
+      const donGiaVonRaw = (cols[4] || '0').trim().replace(/[^0-9.,]/g, '').replace(/\./g, '').replace(',', '.');
+      const soLuong = parseFloat(soLuongRaw) || 1;
+      const donGiaVon = parseFloat(donGiaVonRaw) || 0;
+      const laiSuat = 5;
+      const giaBan = roundGia1K(calcGiaBanGoiY(donGiaVon, laiSuat));
+      rows.push({
+        tempId: crypto.randomUUID(),
+        isNew: true,
+        ten_san_pham: tenSanPham,
+        don_vi: donVi,
+        so_luong: soLuong,
+        don_gia_von: donGiaVon,
+        lai_suat_phan_tram: laiSuat,
+        gia_ban_chua_van_chuyen: giaBan,
+        gia_ban_thuc_te: giaBan,
+        thue_suat: 10,
+        chenh_lech_phan_tram: 0,
+        gia_hop_dong: giaBan,
+      });
+    }
+    if (rows.length === 0) {
+      addToast('warning', 'Không tìm thấy dữ liệu hợp lệ');
+      return;
+    }
+    setChiTiet((prev) => {
+      const kept = prev.filter((r) => r.deleted || !isChiTietRowTrong(r.ten_san_pham));
+      const merged = [...kept, ...rows];
+      const active = merged.filter((r) => !r.deleted);
+      return merged.map((row) =>
+        row.deleted ? row : syncLaiTuGiaBan(row, active, cheDoVanChuyen, phiVCNum)
+      );
+    });
+    setShowExcelPaste(false);
+    setExcelText('');
+    addToast('success', `Đã thêm ${rows.length} dòng từ Excel`);
   }
 
   function removeChiTietRow(tempId: string) {
@@ -320,89 +444,150 @@ export default function HopDongForm({ mode, hopDongId, initialData, fromBaoGia, 
     });
   }
 
-  function updateChiTiet(tempId: string, field: keyof ChiTietRow, value: string | number) {
-    setChiTiet((prev) =>
-      prev.map((row) => {
+  function updateChiTiet(
+    tempId: string,
+    field: keyof ChiTietRow | 'gia_ban_co_vc',
+    value: string | number
+  ) {
+    setChiTiet((prev) => {
+      const active = prev.filter((r) => !r.deleted);
+      return prev.map((row) => {
         if (row.tempId !== tempId) return row;
-        const updated = { ...row, [field]: value };
 
-        // Khi thay đổi giá vốn hoặc lãi% → tính xuôi giá bán và giá HĐ
+        let updated: ChiTietRow =
+          field === 'gia_ban_co_vc' ? { ...row } : { ...row, [field]: value };
+
         if (field === 'don_gia_von' || field === 'lai_suat_phan_tram') {
-          const giaBan = Math.round(
-            calcGiaBanGoiY(Number(updated.don_gia_von), Number(updated.lai_suat_phan_tram)) / 1000
-          ) * 1000;
-          updated.gia_ban_thuc_te = giaBan;
-          updated.gia_hop_dong = Math.round(
-            calcGiaBanGoiY(giaBan, Number(updated.chenh_lech_phan_tram)) / 1000
-          ) * 1000;
+          const gv =
+            field === 'don_gia_von' ? Number(value) : Number(updated.don_gia_von) || 0;
+          const lai =
+            field === 'lai_suat_phan_tram' ? Number(value) : Number(updated.lai_suat_phan_tram) || 0;
+          updated.don_gia_von = gv;
+          updated.lai_suat_phan_tram = lai;
+          const giaChua = roundGia1K(calcGiaBanGoiY(gv, lai));
+          updated.gia_ban_chua_van_chuyen = giaChua;
+          updated.gia_ban_thuc_te = giaChua;
         }
 
-        // Khi nhập giá bán thực tế → tính ngược lãi% và cập nhật giá HĐ
-        if (field === 'gia_ban_thuc_te') {
-          const gv = Number(updated.don_gia_von);
-          if (gv > 0) {
-            updated.lai_suat_phan_tram = Math.round(
-              ((Number(updated.gia_ban_thuc_te) - gv) / gv) * 100 * 100
-            ) / 100;
+        if (field === 'gia_ban_co_vc') {
+          const banCoVc = Math.max(0, Number(value) || 0);
+          if (banCoVc === 0) {
+            updated.gia_ban_chua_van_chuyen = 0;
+            updated.gia_ban_thuc_te = 0;
+            updated.lai_suat_phan_tram = 0;
+          } else {
+            const giaChua = giaChuaTuGiaBanCoVc(
+              banCoVc,
+              updated,
+              active,
+              cheDoVanChuyen,
+              phiVCNum
+            );
+            updated.gia_ban_chua_van_chuyen = giaChua;
+            updated.gia_ban_thuc_te = giaChua;
+            const activeWith = active.map((r) => (r.tempId === tempId ? updated : r));
+            updated = syncLaiTuGiaBan(updated, activeWith, cheDoVanChuyen, phiVCNum);
           }
-          updated.gia_hop_dong = Math.round(
-            calcGiaBanGoiY(Number(updated.gia_ban_thuc_te), Number(updated.chenh_lech_phan_tram)) / 1000
-          ) * 1000;
         }
 
-        // Khi thay đổi chênh lệch% → tính xuôi giá HĐ
-        if (field === 'chenh_lech_phan_tram') {
-          updated.gia_hop_dong = Math.round(
-            calcGiaBanGoiY(Number(updated.gia_ban_thuc_te), Number(updated.chenh_lech_phan_tram)) / 1000
-          ) * 1000;
+        if (field === 'gia_ban_thuc_te' || field === 'gia_ban_chua_van_chuyen') {
+          const giaChua = roundGia1K(Number(value));
+          updated.gia_ban_chua_van_chuyen = giaChua;
+          updated.gia_ban_thuc_te = giaChua;
+          const activeWith = active.map((r) => (r.tempId === tempId ? updated : r));
+          updated = syncLaiTuGiaBan(updated, activeWith, cheDoVanChuyen, phiVCNum);
         }
 
-        // Khi nhập giá hợp đồng → tính ngược chênh lệch%
+        if (field === 'so_luong') {
+          updated.so_luong = Number(value) || 1;
+          const activeWith = active.map((r) => (r.tempId === tempId ? updated : r));
+          updated = syncLaiTuGiaBan(updated, activeWith, cheDoVanChuyen, phiVCNum);
+        }
+
         if (field === 'gia_hop_dong') {
-          const giaBan = Number(updated.gia_ban_thuc_te);
-          if (giaBan > 0) {
+          updated.gia_hop_dong = Number(value);
+          const activeWith = active.map((r) => (r.tempId === tempId ? updated : r));
+          const giaBanCoVc = getGiaBanCoVcForRow(updated, activeWith, cheDoVanChuyen, phiVCNum);
+          if (giaBanCoVc > 0) {
             updated.chenh_lech_phan_tram = Math.round(
-              ((Number(updated.gia_hop_dong) - giaBan) / giaBan) * 100 * 100
+              ((Number(updated.gia_hop_dong) - giaBanCoVc) / giaBanCoVc) * 100 * 100
             ) / 100;
           }
         }
 
         return updated;
-      })
-    );
+      });
+    });
   }
 
-  const activeChiTiet = chiTiet.filter((r) => !r.deleted);
+  // Đổi phí VC / chế độ VC → giá bán đổi theo phân bổ → tính lại lãi %
+  useEffect(() => {
+    setChiTiet((prev) => {
+      const active = prev.filter((r) => !r.deleted);
+      if (active.length === 0) return prev;
+      return prev.map((row) => {
+        if (row.deleted) return row;
+        const activeWith = active.map((r) => (r.tempId === row.tempId ? row : r));
+        return syncLaiTuGiaBan(row, activeWith, cheDoVanChuyen, phiVCNum);
+      });
+    });
+  }, [cheDoVanChuyen, phiVCNum]);
 
-  const calcItems = activeChiTiet.map((r) => ({
+  const activeChiTiet = useMemo(() => chiTiet.filter((r) => !r.deleted), [chiTiet]);
+
+  const withVCItems = useMemo(
+    () =>
+      applyVanChuyenToChiTiet(
+        activeChiTiet.map((r) => ({
+          ...r,
+          gia_ban_chua_van_chuyen: r.gia_ban_chua_van_chuyen ?? r.gia_ban_thuc_te ?? 0,
+        })),
+        cheDoVanChuyen,
+        phiVCNum
+      ),
+    [activeChiTiet, cheDoVanChuyen, phiVCNum]
+  );
+
+  const profitRows = withVCItems.map((r) => ({
     so_luong: r.so_luong,
-    gia_ban_thuc_te: r.gia_hop_dong || r.gia_ban_thuc_te || 0,
-    thue_suat: r.thue_suat,
+    gia_ban_thuc_te: giaBanThuanChoLoiNhuan(r, cheDoVanChuyen),
+    don_gia_von: r.don_gia_von,
   }));
 
-  const tongTruocVAT = calcTongTruocVAT(calcItems);
-  const tongVAT = calcTongVAT(calcItems);
-  // mode=0 (Riêng): phí VC cộng vào tổng TT; mode=1/2: VC tính vào giá vốn
-  const phiVCRieng = cheDoVanChuyen === 0 ? phiVanChuyen : 0;
+  const calcItemsHD = activeChiTiet.map((r) => {
+    const vcRow = withVCItems.find((x) => x.tempId === r.tempId);
+    const giaBanCoVc = vcRow?.gia_ban_thuc_te ?? (Number(r.gia_ban_chua_van_chuyen) || 0);
+    const giaHD = giaHopDongFromBanVaChenh(giaBanCoVc, Number(r.chenh_lech_phan_tram) || 0);
+    return {
+      so_luong: r.so_luong,
+      gia_ban_thuc_te: giaHD,
+      thue_suat: r.thue_suat,
+    };
+  });
+
+  const tongTruocVAT = calcTongTruocVAT(calcItemsHD);
+  const tongVAT = calcTongVAT(calcItemsHD);
+  const phiVCRieng = cheDoVanChuyen === 0 ? phiVCNum : 0;
   const tongThanhToan = calcTongThanhToan(tongTruocVAT, tongVAT, phiVCRieng);
 
-  const tongGiaVonThuan = activeChiTiet.reduce((s, r) => s + Number(r.so_luong) * Number(r.don_gia_von), 0);
-  // mode=1 (Phân bổ vào giá bán): VC do công ty chịu → cộng vào giá vốn
-  // mode=2 (Hỗ trợ): VC do công ty chịu → cộng vào giá vốn
-  // mode=0 (Riêng): VC tính riêng vào hóa đơn → không ảnh hưởng giá vốn
-  const tongGiaVon = cheDoVanChuyen === 0
-    ? tongGiaVonThuan
-    : tongGiaVonThuan + phiVanChuyen;
+  const tongGiaVonThuan = activeChiTiet.reduce(
+    (s, r) => s + Number(r.so_luong) * Number(r.don_gia_von),
+    0
+  );
+  const loiNhuanGop = calcLoiNhuanGop(profitRows, cheDoVanChuyen, phiVCNum);
+  const tyLeLoiNhuan =
+    tongTruocVAT > 0 ? Math.round((loiNhuanGop / tongTruocVAT) * 100) : 0;
 
-  const loiNhuanGop = tongTruocVAT - tongGiaVon;
-  const tyLeLoiNhuan = tongTruocVAT > 0 ? Math.round((loiNhuanGop / tongTruocVAT) * 100) : 0;
-
-  const vat8 = activeChiTiet
-    .filter((r) => r.thue_suat === 8)
-    .reduce((s, r) => s + calcVAT(calcThanhTienBan(r.so_luong, r.gia_hop_dong || r.gia_ban_thuc_te || 0), 8), 0);
-  const vat10 = activeChiTiet
-    .filter((r) => r.thue_suat === 10)
-    .reduce((s, r) => s + calcVAT(calcThanhTienBan(r.so_luong, r.gia_hop_dong || r.gia_ban_thuc_te || 0), 10), 0);
+  const vat8 = activeChiTiet.reduce((s, r, i) => {
+    if (r.thue_suat !== 8) return s;
+    const item = calcItemsHD[i];
+    return s + calcVAT(calcThanhTienBan(item.so_luong, item.gia_ban_thuc_te), 8);
+  }, 0);
+  const vat10 = activeChiTiet.reduce((s, r, i) => {
+    if (r.thue_suat !== 10) return s;
+    const item = calcItemsHD[i];
+    return s + calcVAT(calcThanhTienBan(item.so_luong, item.gia_ban_thuc_te), 10);
+  }, 0);
 
   async function handleSave() {
     if (!khachHangId) { addToast('warning', 'Vui lòng chọn khách hàng'); return; }
@@ -411,28 +596,62 @@ export default function HopDongForm({ mode, hopDongId, initialData, fromBaoGia, 
     const validChiTiet = activeChiTiet.filter((r) => (r.ten_san_pham || '').trim());
     if (validChiTiet.length === 0) { addToast('warning', 'Vui lòng thêm ít nhất một sản phẩm'); return; }
 
+    const withVCForSave = applyVanChuyenToChiTiet(
+      validChiTiet.map((r) => ({
+        ...r,
+        gia_ban_chua_van_chuyen: r.gia_ban_chua_van_chuyen ?? r.gia_ban_thuc_te ?? 0,
+      })),
+      cheDoVanChuyen,
+      phiVCNum
+    );
+
+    const ngayISO = vnToISO(ngayHopDong);
+    const nam = namTuNgay(ngayHopDong, ngayISO);
+    try {
+      const dup = await hopDongApi.checkSoTrung({
+        so_hop_dong: soHopDong.trim(),
+        nam,
+        ngay_hop_dong: ngayISO,
+        exclude_id: mode === 'edit' && hopDongId ? hopDongId : undefined,
+      });
+      if (dup.exists) {
+        addToast('error', `Số hợp đồng "${soHopDong.trim()}" đã tồn tại trong năm ${nam}. Vui lòng nhập số khác.`);
+        return;
+      }
+    } catch (err) {
+      console.error('Kiem tra so hop dong:', err);
+      addToast('error', err instanceof Error ? err.message : 'Không thể kiểm tra số hợp đồng');
+      return;
+    }
+
     setSaving(true);
     try {
     const payload = {
         so_hop_dong: soHopDong.trim(),
-        ngay_hop_dong: vnToISO(ngayHopDong),
+        ngay_hop_dong: ngayISO,
         khach_hang_id: Number(khachHangId),
         ten_du_an: tenDuAn.trim() || null,
-        trang_thai: mode === 'create' ? 'Hieu luc' : undefined,
+        trang_thai: mode === 'create' ? 'Hieu luc' : trangThai,
         che_do_van_chuyen: cheDoVanChuyen,
-        phi_van_chuyen: phiVanChuyen,
+        phi_van_chuyen: phiVCNum,
         mo_ta_noi_dung: moTaNoiDung.trim() || null,
-        chi_tiet: validChiTiet.map((r) => ({
-          ten_san_pham: (r.ten_san_pham || '').trim(),
-          don_vi: (r.don_vi || '').trim(),
-          so_luong: r.so_luong,
-          don_gia_von: r.don_gia_von,
-          lai_suat_phan_tram: r.lai_suat_phan_tram ?? 0,
-          gia_ban_thuc_te: r.gia_ban_thuc_te,
-          thue_suat: r.thue_suat,
-          chenh_lech_phan_tram: r.chenh_lech_phan_tram || 0,
-          gia_hop_dong: r.gia_hop_dong || r.gia_ban_thuc_te,
-        })),
+        chi_tiet: validChiTiet.map((r) => {
+          const vcRow = withVCForSave.find((x) => x.tempId === r.tempId);
+          const giaChua = Number(vcRow?.gia_ban_chua_van_chuyen ?? r.gia_ban_chua_van_chuyen ?? r.gia_ban_thuc_te) || 0;
+          const giaBanCoVc = vcRow?.gia_ban_thuc_te ?? giaChua;
+          const giaHD = giaHopDongFromBanVaChenh(giaBanCoVc, Number(r.chenh_lech_phan_tram) || 0);
+          return {
+            ten_san_pham: (r.ten_san_pham || '').trim(),
+            don_vi: (r.don_vi || '').trim(),
+            so_luong: r.so_luong,
+            don_gia_von: r.don_gia_von,
+            lai_suat_phan_tram: r.lai_suat_phan_tram ?? 0,
+            gia_ban_thuc_te: giaChua,
+            thue_suat: r.thue_suat,
+            chenh_lech_phan_tram: r.chenh_lech_phan_tram || 0,
+            gia_hop_dong: giaHD,
+          };
+        }),
       };
 
       if (mode === 'create') {
@@ -446,7 +665,11 @@ export default function HopDongForm({ mode, hopDongId, initialData, fromBaoGia, 
       }
     } catch (err) {
       console.error('Loi luu hop dong:', err);
-      addToast('error', mode === 'create' ? 'Không thể tạo hợp đồng' : 'Không thể cập nhật hợp đồng');
+      const msg = err instanceof Error ? err.message : '';
+      addToast(
+        'error',
+        msg || (mode === 'create' ? 'Không thể tạo hợp đồng' : 'Không thể cập nhật hợp đồng')
+      );
     } finally {
       setSaving(false);
     }
@@ -454,30 +677,42 @@ export default function HopDongForm({ mode, hopDongId, initialData, fromBaoGia, 
 
   return (
     <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
-      {/* Top info row */}
-      <div className="p-4 border-b border-gray-100">
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 items-end">
-          <div>
-            <label className="block text-xs font-semibold text-gray-600 mb-1">Số Hợp đồng <span className="text-red-500">*</span></label>
-            <input type="text" value={soHopDong} onChange={(e) => setSoHopDong(e.target.value)}
-              className="input-field text-sm" placeholder="Số HĐ..." />
-          </div>
-
-          <div>
-            <label className="block text-xs font-semibold text-gray-600 mb-1">Ngày ký</label>
+      <EntityFormMetaSection>
+        <EntityFormMetaRow>
+          <EntityFormField label="Số hợp đồng" required className="sm:col-span-1 lg:col-span-2">
             <input
               type="text"
-              value={ngayHopDong}
-              onChange={(e) => setNgayHopDong(e.target.value)}
+              value={soHopDong}
+              onChange={(e) => setSoHopDong(e.target.value)}
               className="input-field text-sm"
-              placeholder="dd/mm/yyyy"
-              maxLength={10}
+              placeholder="Số HĐ..."
             />
-          </div>
+          </EntityFormField>
 
-          <div className="lg:col-span-2 relative" ref={khDropRef}>
-            <label className="block text-xs font-semibold text-gray-600 mb-1">Khách hàng <span className="text-red-500">*</span></label>
-            <div className="relative">
+          <EntityFormField label="Ngày ký" className="sm:col-span-1 lg:col-span-2">
+            <VnDateInput value={ngayHopDong} onChange={setNgayHopDong} />
+          </EntityFormField>
+
+          {mode === 'edit' && (
+            <EntityFormField label="Trạng thái" className="sm:col-span-1 lg:col-span-2">
+              <select
+                value={trangThai}
+                onChange={(e) => setTrangThai(e.target.value)}
+                className="input-field text-sm w-full"
+              >
+                <option value="Hieu luc">{trangThaiHopDongLabel('Hieu luc')}</option>
+                <option value="Thanh ly">{trangThaiHopDongLabel('Thanh ly')}</option>
+                <option value="Huy">{trangThaiHopDongLabel('Huy')}</option>
+              </select>
+            </EntityFormField>
+          )}
+
+          <EntityFormField
+            label="Khách hàng"
+            required
+            className={`sm:col-span-2 relative ${mode === 'edit' ? 'lg:col-span-3' : 'lg:col-span-4'}`}
+          >
+            <div className="relative" ref={khDropRef}>
               <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
               <input
                 type="text"
@@ -496,7 +731,7 @@ export default function HopDongForm({ mode, hopDongId, initialData, fromBaoGia, 
                   setKhDropOpen(true);
                   if (!khachHangId) searchKhachHang(khSearch);
                 }}
-                className="input-field text-sm pl-7 pr-7 w-full"
+                className={`input-field text-sm pl-7 pr-7 w-full ${khachHangId ? 'border-green-400 ring-1 ring-green-400/30' : ''}`}
                 placeholder="Tìm khách hàng..."
               />
               {khSearch && (
@@ -508,103 +743,166 @@ export default function HopDongForm({ mode, hopDongId, initialData, fromBaoGia, 
                   <X className="w-3.5 h-3.5" />
                 </button>
               )}
+              {khDropOpen && (khSearching || khResults.length > 0) && (
+                <div className="absolute z-50 top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-52 overflow-y-auto">
+                  {khSearching ? (
+                    <div className="px-3 py-2 text-xs text-gray-400">Đang tìm...</div>
+                  ) : (
+                    khResults.map((kh) => (
+                      <button
+                        key={kh.id}
+                        type="button"
+                        className="w-full text-left px-3 py-2 text-sm hover:bg-blue-50 transition-colors"
+                        onClick={() => {
+                          setKhachHangId(String(kh.id));
+                          setKhachHangName(kh.ten_cong_ty);
+                          setKhSearch(kh.ten_cong_ty);
+                          setKhDropOpen(false);
+                        }}
+                      >
+                        <span className="font-medium text-gray-900">{kh.ten_cong_ty}</span>
+                      </button>
+                    ))
+                  )}
+                </div>
+              )}
             </div>
-            {khDropOpen && (khSearching || khResults.length > 0) && (
-              <div className="absolute z-50 top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-52 overflow-y-auto">
-                {khSearching ? (
-                  <div className="px-3 py-2 text-xs text-gray-400">Đang tìm...</div>
-                ) : (
-                  khResults.map((kh) => (
-                    <button
-                      key={kh.id}
-                      type="button"
-                      className="w-full text-left px-3 py-2 text-sm hover:bg-blue-50 transition-colors"
-                      onClick={() => {
-                        setKhachHangId(String(kh.id));
-                        setKhachHangName(kh.ten_cong_ty);
-                        setKhSearch(kh.ten_cong_ty);
-                        setKhDropOpen(false);
-                      }}
-                    >
-                      <span className="font-medium text-gray-900">{kh.ten_cong_ty}</span>
-                    </button>
-                  ))
-                )}
-              </div>
-            )}
-            {khachHangId && (
-              <div className="mt-1 text-xs text-green-600 font-medium">
-                ✓ {khachHangName}
-              </div>
-            )}
-          </div>
+          </EntityFormField>
 
-          <div>
-            <label className="block text-xs font-semibold text-gray-600 mb-1">Tên Dự Án</label>
-            <input type="text" value={tenDuAn} onChange={(e) => setTenDuAn(e.target.value)}
-              className="input-field text-sm" placeholder="Tên dự án..." />
-          </div>
+          <EntityFormField
+            label="Tên dự án"
+            className={`sm:col-span-2 ${mode === 'edit' ? 'lg:col-span-3' : 'lg:col-span-4'}`}
+          >
+            <input
+              type="text"
+              value={tenDuAn}
+              onChange={(e) => setTenDuAn(e.target.value)}
+              className="input-field text-sm"
+              placeholder="Tên dự án..."
+            />
+          </EntityFormField>
+        </EntityFormMetaRow>
 
-          <div>
-            <label className="block text-xs font-semibold text-gray-600 mb-1">Mô tả nội dung</label>
-            <input type="text" value={moTaNoiDung} onChange={(e) => setMoTaNoiDung(e.target.value)}
-              className="input-field text-sm" placeholder="Mô tả ngắn..." />
-          </div>
-        </div>
+        <EntityFormMetaRow>
+          <EntityFormField label="Mô tả nội dung" className="sm:col-span-2 lg:col-span-4">
+            <input
+              type="text"
+              value={moTaNoiDung}
+              onChange={(e) => setMoTaNoiDung(e.target.value)}
+              className="input-field text-sm"
+              placeholder="Mô tả ngắn..."
+            />
+          </EntityFormField>
 
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 items-end mt-3">
-          <div>
-            <label className="block text-xs font-semibold text-gray-600 mb-1">Thư mục Drive (Lưu File HĐ)</label>
-            <div className="flex gap-1">
-              <input type="text" value={tenFolder} onChange={(e) => setTenFolder(e.target.value)}
-                className="input-field text-sm flex-1" placeholder="Tên folder..." />
-              <button className="px-3 py-2 bg-blue-600 text-white rounded-lg text-xs font-bold hover:bg-blue-700 transition-colors whitespace-nowrap">
-                TẠO
+          <EntityFormField label="Thư mục Drive" className="sm:col-span-2 lg:col-span-4 min-w-0">
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={tenFolder}
+                onChange={(e) => setTenFolder(e.target.value)}
+                className="input-field text-sm flex-1 min-w-0"
+                placeholder="Tên folder..."
+              />
+              <button
+                type="button"
+                className="h-10 shrink-0 px-4 bg-primary-600 text-white rounded-lg text-xs font-semibold hover:bg-primary-700 transition-colors"
+              >
+                Tạo
               </button>
             </div>
-          </div>
+          </EntityFormField>
 
-          <div>
-            <label className="block text-xs font-semibold text-gray-600 mb-1">Chế độ Vận chuyển</label>
-            <select value={cheDoVanChuyen} onChange={(e) => setCheDoVanChuyen(Number(e.target.value))} className="select-field text-sm">
+          <EntityFormField label="Chế độ vận chuyển" className="sm:col-span-1 lg:col-span-2">
+            <select
+              value={cheDoVanChuyen}
+              onChange={(e) => setCheDoVanChuyen(Number(e.target.value))}
+              className="select-field text-sm w-full"
+            >
               <option value={0}>Riêng</option>
               <option value={1}>Phân bổ vào giá bán</option>
               <option value={2}>Hỗ trợ</option>
             </select>
-          </div>
+          </EntityFormField>
 
-          <div>
-            <label className="block text-xs font-semibold text-red-600 mb-1">Tiền VC (Giá vốn)</label>
+          <EntityFormField label="Phí vận chuyển (giá vốn)" className="sm:col-span-1 lg:col-span-2">
             <NumInput
               value={phiVanChuyen}
               onChange={setPhiVanChuyen}
-              className="input-field text-sm text-right"
+              className="input-field text-sm text-right w-full"
               min={0}
               isInteger
               format="money"
             />
-          </div>
-        </div>
-      </div>
+          </EntityFormField>
+        </EntityFormMetaRow>
+      </EntityFormMetaSection>
 
       {/* Chi tiet table */}
       <div className="p-4">
-        <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
           <span className="text-xs font-bold text-gray-600 uppercase tracking-widest">Chi tiết sản phẩm hợp đồng</span>
-          <button
-            onClick={() => setShowInheritModal(true)}
-            className="flex items-center gap-2 px-3 py-2 bg-blue-600 text-white rounded-lg text-xs font-bold hover:bg-blue-700 transition-colors shadow-sm"
-          >
-            <ClipboardList className="w-3.5 h-3.5" />
-            KẾ THỪA BÁO GIÁ
-          </button>
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              type="button"
+              onClick={() => setShowExcelPaste(true)}
+              className="flex items-center gap-2 px-3 py-2 bg-green-600 text-white rounded-lg text-xs font-bold hover:bg-green-700 transition-colors shadow-sm"
+            >
+              <FileSpreadsheet className="w-3.5 h-3.5" />
+              DÁN TỪ EXCEL
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowInheritModal(true)}
+              className="flex items-center gap-2 px-3 py-2 bg-blue-600 text-white rounded-lg text-xs font-bold hover:bg-blue-700 transition-colors shadow-sm"
+            >
+              <ClipboardList className="w-3.5 h-3.5" />
+              KẾ THỪA BÁO GIÁ
+            </button>
+          </div>
         </div>
+
+        {showExcelPaste && (
+          <div className="mb-4 p-4 bg-green-50 border border-green-200 rounded-lg">
+            <div className="flex items-center gap-2 mb-2 flex-wrap">
+              <ClipboardPaste className="w-4 h-4 text-green-700 shrink-0" />
+              <span className="text-sm font-semibold text-green-800">Dán dữ liệu từ Excel</span>
+              <span className="text-xs text-green-600">
+                — Cột 1: Tên SP · Cột 3: Đơn vị · Cột 4: SL · Cột 5: Giá vốn · Xóa dòng trống rồi thêm vào cuối
+              </span>
+            </div>
+            <textarea
+              ref={excelTextareaRef}
+              value={excelText}
+              onChange={(e) => setExcelText(e.target.value)}
+              className="w-full h-32 px-3 py-2 text-sm border border-green-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 font-mono resize-none"
+              placeholder="Ctrl+C từ Excel rồi Ctrl+V vào đây..."
+              autoFocus
+            />
+            <div className="flex gap-2 mt-2">
+              <button
+                type="button"
+                onClick={handlePasteFromExcel}
+                className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-semibold hover:bg-green-700 transition-colors"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                Nhập dữ liệu
+              </button>
+              <button
+                type="button"
+                onClick={() => { setShowExcelPaste(false); setExcelText(''); }}
+                className="px-4 py-2 bg-white text-gray-600 border border-gray-300 rounded-lg text-sm hover:bg-gray-50 transition-colors"
+              >
+                Hủy
+              </button>
+            </div>
+          </div>
+        )}
 
         <div className="overflow-x-auto rounded-lg border border-gray-200">
           <table className="w-full text-sm">
             <thead>
               <tr className="bg-gray-50 border-b border-gray-200">
-                <th className="px-2 py-2.5 text-center text-xs font-bold text-gray-600 w-10">STT</th>
+                <th className="px-2 py-2.5 text-center text-xs font-bold text-slate-600 w-[3.75rem]">STT</th>
                 <th className="px-2 py-2.5 text-left text-xs font-bold text-gray-600">TÊN SẢN PHẨM</th>
                 <th className="px-2 py-2.5 text-center text-xs font-bold text-gray-600 w-16">ĐV</th>
                 <th className="px-2 py-2.5 text-center text-xs font-bold text-gray-600 w-16">SL</th>
@@ -620,22 +918,17 @@ export default function HopDongForm({ mode, hopDongId, initialData, fromBaoGia, 
             </thead>
             <tbody>
               {activeChiTiet.map((row, idx) => {
-                const giaHD = row.gia_hop_dong || row.gia_ban_thuc_te || 0;
+                const vcRow = withVCItems.find((x) => x.tempId === row.tempId);
+                const giaBanCoVc = vcRow?.gia_ban_thuc_te ?? (Number(row.gia_ban_chua_van_chuyen) || 0);
+                const giaHD = giaHopDongFromBanVaChenh(giaBanCoVc, Number(row.chenh_lech_phan_tram) || 0);
                 const thanhTien = calcThanhTienBan(row.so_luong, giaHD);
                 return (
                   <tr key={row.tempId} className="group border-b border-gray-100 hover:bg-blue-50/30 transition-colors">
-                    <td className="px-2 py-1 text-center">
-                      <div className="flex flex-col items-center gap-0.5">
-                        <span className="text-xs text-gray-500 font-medium">{idx + 1}</span>
-                        <button
-                          onClick={() => insertRowAfter(row.tempId)}
-                          title="Thêm dòng bên dưới"
-                          className="opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded text-gray-400 hover:text-blue-600 hover:bg-blue-100"
-                        >
-                          <Plus className="w-3 h-3" />
-                        </button>
-                      </div>
-                    </td>
+                    <ChiTietSttCell
+                      index={idx + 1}
+                      onInsertBefore={() => insertRowBefore(row.tempId)}
+                      onInsertAfter={() => insertRowAfter(row.tempId)}
+                    />
                     <td className="px-2 py-1">
                       <input type="text" value={row.ten_san_pham}
                         onChange={(e) => updateChiTiet(row.tempId, 'ten_san_pham', e.target.value)}
@@ -659,15 +952,27 @@ export default function HopDongForm({ mode, hopDongId, initialData, fromBaoGia, 
                         className={`${inputCls} text-right text-green-700 font-medium`} min={0} isInteger format="number" />
                     </td>
                     <td className="px-1 py-1">
-                      <NumInput value={row.gia_ban_thuc_te} onChange={(v) => updateChiTiet(row.tempId, 'gia_ban_thuc_te', v)}
-                        className={`${inputCls} text-right text-gray-700`} min={0} isInteger format="money" />
+                      <NumInput
+                        value={giaBanCoVc}
+                        onChange={(v) => updateChiTiet(row.tempId, 'gia_ban_co_vc', v)}
+                        className={`${inputCls} text-right text-gray-700`}
+                        min={0}
+                        isInteger
+                        format="money"
+                      />
+                      {cheDoVanChuyen === 1 &&
+                        giaBanCoVc !== (row.gia_ban_chua_van_chuyen ?? 0) && (
+                          <div className="text-[10px] text-orange-500 leading-none text-right pr-1">
+                            gốc: {formatVND(row.gia_ban_chua_van_chuyen ?? 0)}
+                          </div>
+                        )}
                     </td>
                     <td className="px-1 py-1">
                       <NumInput value={row.chenh_lech_phan_tram || 0} onChange={(v) => updateChiTiet(row.tempId, 'chenh_lech_phan_tram', v)}
                         className={`${inputCls} text-right text-orange-600 font-medium`} min={-100} isInteger format="number" />
                     </td>
                     <td className="px-1 py-1">
-                      <NumInput value={row.gia_hop_dong || row.gia_ban_thuc_te || 0} onChange={(v) => updateChiTiet(row.tempId, 'gia_hop_dong', v)}
+                      <NumInput value={giaHD} onChange={(v) => updateChiTiet(row.tempId, 'gia_hop_dong', v)}
                         className={`${inputCls} text-right text-blue-700 font-semibold`} min={0} isInteger format="money" />
                     </td>
                     <td className="px-2 py-1 text-right text-sm font-semibold text-gray-800 whitespace-nowrap">
@@ -709,32 +1014,13 @@ export default function HopDongForm({ mode, hopDongId, initialData, fromBaoGia, 
 
       {/* Summary */}
       <div className="px-4 pb-4 grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <div className="rounded-xl p-4 bg-green-50 border border-green-200">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-bold text-green-800 uppercase tracking-wide">Lợi nhuận gộp:</span>
-            <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${tyLeLoiNhuan >= 0 ? 'bg-green-200 text-green-800' : 'bg-red-200 text-red-800'}`}>
-              {tyLeLoiNhuan}%
-            </span>
-          </div>
-          <div className="text-sm text-gray-600 space-y-1 mb-2">
-            <div className="flex justify-between">
-              <span>Tổng giá bán (trước thuế):</span>
-              <span className="font-medium">{tongTruocVAT > 0 ? formatVND(tongTruocVAT) : '0'}</span>
-            </div>
-            <div className="flex justify-between">
-              <span>
-                Tổng giá vốn
-                {cheDoVanChuyen === 1 && <span className="text-xs text-orange-500 ml-1">(+VC phân bổ)</span>}
-                {cheDoVanChuyen === 2 && <span className="text-xs text-orange-500 ml-1">(+VC hỗ trợ)</span>}
-                :
-              </span>
-              <span className="text-red-600 font-medium">{tongGiaVon > 0 ? formatVND(tongGiaVon) : <span className="text-red-400">0</span>}</span>
-            </div>
-          </div>
-          <div className={`text-2xl font-bold ${loiNhuanGop >= 0 ? 'text-green-700' : 'text-red-600'}`}>
-            {formatVND(loiNhuanGop)}
-          </div>
-        </div>
+        <LoiNhuanGopSummary
+          tongGiaVonChuaVc={tongGiaVonThuan}
+          phiVanChuyen={phiVCNum}
+          giaBanChuaThue={tongTruocVAT}
+          loiNhuan={loiNhuanGop}
+          tyLeLai={tyLeLoiNhuan}
+        />
 
         <div className="rounded-xl p-4 bg-white border border-gray-200">
           <div className="space-y-1.5 text-sm">
@@ -752,12 +1038,6 @@ export default function HopDongForm({ mode, hopDongId, initialData, fromBaoGia, 
               <span className="text-red-500">Thuế VAT 10%:</span>
               <span className="text-red-500">{vat10 > 0 ? formatVND(vat10) : '0'}</span>
             </div>
-            {cheDoVanChuyen === 0 && phiVanChuyen > 0 && (
-              <div className="flex justify-between">
-                <span className="text-gray-600">Phí vận chuyển (riêng):</span>
-                <span className="font-medium text-gray-900">{formatVND(phiVanChuyen)}</span>
-              </div>
-            )}
             <div className="border-t border-gray-200 pt-2 mt-2 flex justify-between items-center">
               <span className="font-bold text-gray-800 uppercase text-xs tracking-wide">Tổng thanh toán:</span>
               <span className="text-lg font-bold text-blue-700">
@@ -803,16 +1083,12 @@ export default function HopDongForm({ mode, hopDongId, initialData, fromBaoGia, 
 
             <div className="px-5 py-3 border-b border-gray-100">
               <label className="block text-xs font-semibold text-gray-600 mb-1.5">Lọc theo khách hàng</label>
-              <select
+              <KhachHangFilterField
                 value={inheritKhachHangFilter}
-                onChange={(e) => setInheritKhachHangFilter(e.target.value)}
-                className="select-field w-full text-sm"
-              >
-                <option value="">-- Tất cả khách hàng --</option>
-                {inheritKhachHangList.map((kh) => (
-                  <option key={kh.id} value={kh.id}>{kh.ten_cong_ty}</option>
-                ))}
-              </select>
+                onChange={setInheritKhachHangFilter}
+                placeholder="Tìm khách hàng..."
+                className="w-full"
+              />
             </div>
 
             <div className="flex-1 overflow-y-auto">

@@ -1,14 +1,21 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
-import { supabase } from '../../lib/supabase';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useAuthStore } from '../../store/auth';
 import { useToastStore } from '../../store/toast';
 import { formatDate, formatVND } from '../../lib/utils';
 import ConfirmDialog from '../../components/ui/ConfirmDialog';
 import LoadingSpinner from '../../components/ui/LoadingSpinner';
 import Modal from '../../components/ui/Modal';
-import { taiKhoanTienApi, hangMucThuChiApi } from '../../lib/api';
+import { taiKhoanTienApi, hangMucThuChiApi, cauHinhApi, usersApi } from '../../lib/api';
 import { TaiKhoanTien, HangMucThuChi, PhamViTaiKhoan, PhamViHangMuc, LoaiGiaoDich } from '../../types';
-import { Settings, Users, Shield, Key, Trash2, User, FileSpreadsheet, Upload, CheckCircle, X, HardDrive, Link2, LogOut, Wallet, ListTree, Plus, Pencil, ChevronRight, Database, RefreshCw, AlertCircle, ChevronDown } from 'lucide-react';
+import { Settings, Users, Shield, Key, Trash2, User, FileSpreadsheet, Upload, CheckCircle, X, HardDrive, Link2, LogOut, Wallet, ListTree, Plus, Pencil, ChevronRight } from 'lucide-react';
+
+function authHeaders(json = false): Record<string, string> {
+  const token = localStorage.getItem('token');
+  const h: Record<string, string> = {};
+  if (token) h.Authorization = `Bearer ${token}`;
+  if (json) h['Content-Type'] = 'application/json';
+  return h;
+}
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -24,8 +31,6 @@ interface TemplateMeta {
   name: string;
   url: string;
 }
-
-const BUCKET = 'templates';
 
 const MAU_KEYS: { key: string; label: string }[] = [
   { key: 'mau_bao_gia_hapulico', label: 'Mẫu Hapulico' },
@@ -46,14 +51,10 @@ function TemplateUploadCard({ configKey, label }: { configKey: string; label: st
   const fetchMeta = useCallback(async () => {
     setLoadingMeta(true);
     try {
-      const { data } = await supabase
-        .from('cau_hinh')
-        .select('value, updated_at')
-        .eq('key', configKey)
-        .maybeSingle();
-      if (data?.value) {
-        setMeta(JSON.parse(data.value) as TemplateMeta);
-        setUpdatedAt(data.updated_at);
+      const res = await cauHinhApi.get(configKey);
+      if (res.data?.value) {
+        setMeta(JSON.parse(res.data.value) as TemplateMeta);
+        setUpdatedAt(res.data.updated_at);
       } else {
         setMeta(null);
         setUpdatedAt(null);
@@ -67,15 +68,6 @@ function TemplateUploadCard({ configKey, label }: { configKey: string; label: st
 
   useEffect(() => { fetchMeta(); }, [fetchMeta]);
 
-  async function ensureBucket() {
-    const { data: buckets } = await supabase.storage.listBuckets();
-    const exists = buckets?.some((b) => b.name === BUCKET);
-    if (!exists) {
-      const { error } = await supabase.storage.createBucket(BUCKET, { public: true });
-      if (error && !error.message.toLowerCase().includes('already exist')) throw error;
-    }
-  }
-
   async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -86,48 +78,15 @@ function TemplateUploadCard({ configKey, label }: { configKey: string; label: st
 
     setUploading(true);
     try {
-      const safeName = file.name
-        .normalize('NFD')
-        .replace(/[\u0300-\u036f]/g, '')
-        .replace(/đ/gi, 'd')
-        .replace(/[^a-zA-Z0-9._-]/g, '_');
-      const path = `${configKey}/${Date.now()}_${safeName}`;
-      const { error: uploadError } = await supabase.storage
-        .from(BUCKET)
-        .upload(path, file, { upsert: true });
-      if (uploadError) {
-        console.error('Storage upload error:', uploadError);
-        throw new Error(`Upload file thất bại: ${uploadError.message}`);
-      }
-
-      const { data: urlData } = supabase.storage.from(BUCKET).getPublicUrl(path);
-
-      const value = JSON.stringify({ name: file.name, url: urlData.publicUrl });
-      const now = new Date().toISOString();
-
-      const { data: existing } = await supabase
-        .from('cau_hinh')
-        .select('key')
-        .eq('key', configKey)
-        .maybeSingle();
-
-      let saveError;
-      if (existing) {
-        const { error } = await supabase
-          .from('cau_hinh')
-          .update({ value, updated_at: now })
-          .eq('key', configKey);
-        saveError = error;
-      } else {
-        const { error } = await supabase
-          .from('cau_hinh')
-          .insert({ key: configKey, value, updated_at: now });
-        saveError = error;
-      }
-      if (saveError) {
-        console.error('DB save error:', saveError);
-        throw new Error(`Lưu DB thất bại: ${saveError.message}`);
-      }
+      const formData = new FormData();
+      formData.append('file', file);
+      const res = await fetch(`/api/cau-hinh/${configKey}/upload`, {
+        method: 'POST',
+        headers: authHeaders(),
+        body: formData,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || data.message || 'Upload thất bại');
 
       addToast('success', `Đã upload mẫu "${label}" thành công`);
       fetchMeta();
@@ -142,7 +101,7 @@ function TemplateUploadCard({ configKey, label }: { configKey: string; label: st
 
   async function handleRemove() {
     try {
-      await supabase.from('cau_hinh').delete().eq('key', configKey);
+      await cauHinhApi.delete(configKey);
       setMeta(null);
       setUpdatedAt(null);
       addToast('success', `Đã xóa mẫu "${label}"`);
@@ -216,38 +175,54 @@ function TemplateUploadCard({ configKey, label }: { configKey: string; label: st
 
 // ─── Google Drive Card ────────────────────────────────────────────────────────
 
+const DRIVE_ERROR_LABELS: Record<string, string> = {
+  access_denied: 'Bạn đã từ chối quyền truy cập Google Drive',
+  invalid_state: 'Phiên kết nối không hợp lệ hoặc đã hết hạn',
+  not_configured: 'Server chưa cấu hình Google OAuth (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET)',
+  server_error: 'Lỗi server khi lưu token Google Drive',
+};
+
 function GoogleDriveCard() {
   const addToast = useToastStore((s) => s.addToast);
   const [driveEmail, setDriveEmail] = useState<string | null>(null);
+  const [configured, setConfigured] = useState(true);
   const [loading, setLoading] = useState(true);
   const [connecting, setConnecting] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
 
+  const authHeaders = useCallback(() => {
+    const token = localStorage.getItem('token');
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  }, []);
+
   const fetchDriveStatus = useCallback(async () => {
     setLoading(true);
     try {
-      const { data } = await supabase
-        .from('google_drive_tokens')
-        .select('google_email')
-        .maybeSingle();
-      setDriveEmail(data?.google_email || null);
+      const resp = await fetch('/api/google-drive/status', { headers: authHeaders() });
+      if (!resp.ok) throw new Error('Không thể kiểm tra trạng thái');
+      const data = await resp.json();
+      setConfigured(data.configured !== false);
+      setDriveEmail(data.connected ? (data.google_email || 'Đã kết nối') : null);
     } catch {
       setDriveEmail(null);
+      setConfigured(true);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [authHeaders]);
 
   useEffect(() => {
     fetchDriveStatus();
-    // Handle redirect back from OAuth
     const params = new URLSearchParams(window.location.search);
     if (params.get('drive_connected') === '1') {
       addToast('success', 'Đã kết nối Google Drive thành công');
       window.history.replaceState({}, '', window.location.pathname);
       fetchDriveStatus();
     } else if (params.get('drive_error')) {
-      addToast('error', 'Kết nối Google Drive thất bại. Vui lòng thử lại.');
+      const code = params.get('drive_error') || '';
+      const detail = params.get('detail') || '';
+      const label = DRIVE_ERROR_LABELS[code] || 'Kết nối Google Drive thất bại';
+      addToast('error', detail ? `${label}: ${detail}` : label);
       window.history.replaceState({}, '', window.location.pathname);
     }
   }, [fetchDriveStatus, addToast]);
@@ -255,15 +230,15 @@ function GoogleDriveCard() {
   async function handleConnect() {
     setConnecting(true);
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      const token = session?.access_token;
-      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
       const appOrigin = window.location.origin;
       const resp = await fetch(
-        `${supabaseUrl}/functions/v1/google-drive-auth?redirect=/cai-dat&app_origin=${encodeURIComponent(appOrigin)}`,
-        { headers: { Authorization: `Bearer ${token}` } }
+        `/api/google-drive/auth-url?redirect=/cai-dat&app_origin=${encodeURIComponent(appOrigin)}`,
+        { headers: authHeaders() },
       );
-      const data = await resp.json();
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        throw new Error(data.message || data.error || 'Không thể lấy link xác thực');
+      }
       if (data.url) {
         window.location.href = data.url;
       } else {
@@ -278,11 +253,15 @@ function GoogleDriveCard() {
   async function handleDisconnect() {
     setDisconnecting(true);
     try {
-      await supabase.from('google_drive_tokens').delete().neq('user_id', '');
+      const resp = await fetch('/api/google-drive/disconnect', {
+        method: 'DELETE',
+        headers: authHeaders(),
+      });
+      if (!resp.ok) throw new Error('Ngắt kết nối thất bại');
       setDriveEmail(null);
       addToast('success', 'Đã ngắt kết nối Google Drive');
-    } catch {
-      addToast('error', 'Không thể ngắt kết nối');
+    } catch (err: any) {
+      addToast('error', err.message || 'Không thể ngắt kết nối');
     } finally {
       setDisconnecting(false);
     }
@@ -301,7 +280,18 @@ function GoogleDriveCard() {
           </div>
         </div>
       </div>
-      <div className="px-6 py-5">
+      <div className="px-6 py-5 space-y-4">
+        {!configured && (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+            <p className="font-semibold">Chưa cấu hình Google OAuth trên server</p>
+            <p className="mt-1 text-xs text-amber-800">
+              Tạo OAuth Client trên Google Cloud Console, thêm redirect URI{' '}
+              <code className="bg-amber-100 px-1 rounded">http://localhost:3000/api/google-drive/callback</code>,{' '}
+              rồi điền <code className="bg-amber-100 px-1 rounded">GOOGLE_CLIENT_ID</code> và{' '}
+              <code className="bg-amber-100 px-1 rounded">GOOGLE_CLIENT_SECRET</code> vào file <code className="bg-amber-100 px-1 rounded">.env</code>.
+            </p>
+          </div>
+        )}
         {loading ? (
           <div className="flex items-center gap-2 text-sm text-gray-400">
             <div className="w-4 h-4 border-2 border-gray-200 border-t-gray-400 rounded-full animate-spin" />
@@ -343,7 +333,7 @@ function GoogleDriveCard() {
             </div>
             <button
               onClick={handleConnect}
-              disabled={connecting}
+              disabled={connecting || !configured}
               className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 transition-colors disabled:opacity-50"
             >
               <HardDrive className="w-4 h-4" />
@@ -399,6 +389,149 @@ function loaiGdHmLabel(v: string) {
 }
 function phamViHmLabel(v: string) {
   return PHAM_VI_HM_OPTIONS.find((o) => o.value === v)?.label ?? v;
+}
+
+const CAP_DO_LABEL: Record<number, string> = {
+  1: 'Cấp 1 — Nhóm lớn',
+  2: 'Cấp 2 — Nhóm nhỏ',
+  3: 'Cấp 3 — Chi tiết (nhập GD)',
+};
+
+const LOAI_PREFIX: Record<string, string> = {
+  thu: 'THU',
+  chi: 'CHI',
+  chuyen_khoan_noi_bo: 'CK',
+  dieu_chinh_so_du: 'DC',
+  tat_ca: 'HM',
+};
+
+function removeVietnameseAccents(str: string): string {
+  return str
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/đ/gi, 'd');
+}
+
+function slugFromTenHangMuc(ten: string): string {
+  const plain = removeVietnameseAccents(ten)
+    .replace(/[^a-zA-Z0-9\s]/g, ' ')
+    .trim();
+  if (!plain) return 'HM';
+  const words = plain.split(/\s+/).filter(Boolean);
+  if (words.length === 1) return words[0].toUpperCase().slice(0, 10);
+  return words.map((w) => w[0] || '').join('').toUpperCase().slice(0, 10);
+}
+
+function getHangMucCapDo(items: HangMucThuChi[], item: HangMucThuChi): number {
+  let depth = 1;
+  let cur: HangMucThuChi | undefined = item;
+  while (cur?.parent_id) {
+    const parent = items.find((i) => i.id === cur!.parent_id);
+    if (!parent) break;
+    depth += 1;
+    cur = parent;
+  }
+  return depth;
+}
+
+function isHangMucDescendant(items: HangMucThuChi[], ancestorId: number, maybeDescendantId: number): boolean {
+  let cur = items.find((i) => i.id === maybeDescendantId);
+  while (cur?.parent_id) {
+    if (cur.parent_id === ancestorId) return true;
+    cur = items.find((i) => i.id === cur!.parent_id);
+  }
+  return false;
+}
+
+function previewMaHangMuc(
+  items: HangMucThuChi[],
+  ten: string,
+  parentId: string | number,
+  loaiGiaoDich: LoaiGiaoDich | 'tat_ca',
+): string {
+  const parent = parentId !== '' && parentId != null
+    ? items.find((i) => i.id === Number(parentId))
+    : null;
+  const slug = slugFromTenHangMuc(ten);
+  if (!slug || slug === 'HM') return '';
+  const base = parent
+    ? `${parent.ma_hang_muc}.${slug}`
+    : `${LOAI_PREFIX[loaiGiaoDich] || 'HM'}.${slug}`;
+  const existing = new Set(items.map((i) => i.ma_hang_muc));
+  if (!existing.has(base)) return base;
+  let seq = 2;
+  while (existing.has(`${base}${seq}`)) seq += 1;
+  return `${base}${seq}`;
+}
+
+interface ParentOption {
+  id: number;
+  label: string;
+  depth: number;
+  ma_hang_muc: string;
+  loai_giao_dich: HangMucThuChi['loai_giao_dich'];
+  pham_vi: PhamViHangMuc;
+}
+
+function sortHangMucSiblings(list: HangMucThuChi[]): HangMucThuChi[] {
+  return [...list].sort(
+    (a, b) => (a.thu_tu ?? 0) - (b.thu_tu ?? 0) || a.ten_hang_muc.localeCompare(b.ten_hang_muc, 'vi'),
+  );
+}
+
+/** Dropdown cha: duyệt cây cha → con (cấp 1 rồi cấp 2 ngay bên dưới). */
+function buildParentOptions(items: HangMucThuChi[], editingId?: number): ParentOption[] {
+  const eligibleIds = new Set(
+    items
+      .filter((i) => i.id !== editingId)
+      .filter((i) => !editingId || !isHangMucDescendant(items, editingId, i.id))
+      .filter((i) => getHangMucCapDo(items, i) < 3)
+      .map((i) => i.id),
+  );
+
+  const childrenByParent = new Map<number | 'root', HangMucThuChi[]>();
+  const bucket = (key: number | 'root') => {
+    if (!childrenByParent.has(key)) childrenByParent.set(key, []);
+    return childrenByParent.get(key)!;
+  };
+
+  for (const hm of items) {
+    if (!eligibleIds.has(hm.id)) continue;
+    const parentKey = hm.parent_id && eligibleIds.has(hm.parent_id) ? hm.parent_id : 'root';
+    bucket(parentKey).push(hm);
+  }
+
+  for (const list of childrenByParent.values()) {
+    sortHangMucSiblings(list);
+  }
+
+  const result: ParentOption[] = [];
+  const walk = (parentKey: number | 'root', depth: number) => {
+    for (const hm of childrenByParent.get(parentKey) || []) {
+      result.push({
+        id: hm.id,
+        label: hm.ten_hang_muc,
+        depth,
+        ma_hang_muc: hm.ma_hang_muc,
+        loai_giao_dich: hm.loai_giao_dich,
+        pham_vi: hm.pham_vi,
+      });
+      walk(hm.id, depth + 1);
+    }
+  };
+  walk('root', 1);
+  return result;
+}
+
+function renderParentSelectOptions(options: ParentOption[]) {
+  return options.map((o) => (
+    <option key={o.id} value={String(o.id)}>
+      {'\u00A0'.repeat((o.depth - 1) * 3)}
+      {o.depth === 1 ? '▸ ' : '   › '}
+      {o.label}
+      {o.ma_hang_muc ? ` (${o.ma_hang_muc})` : ''}
+    </option>
+  ));
 }
 
 // ─── TaiKhoanTien Management ─────────────────────────────────────────────────
@@ -648,14 +781,50 @@ function HangMucThuChiSection() {
   useEffect(() => { load(); }, [load]);
 
   const rootItems = items.filter((i) => !i.parent_id);
+  const parentOptions = useMemo(
+    () => buildParentOptions(items, editing?.id),
+    [items, editing?.id],
+  );
+
+  const newCapDo = useMemo(() => {
+    if (form.parent_id === '' || form.parent_id == null) return 1;
+    const parent = items.find((i) => i.id === Number(form.parent_id));
+    return parent ? getHangMucCapDo(items, parent) + 1 : 1;
+  }, [form.parent_id, items]);
+
+  const previewMa = useMemo(() => {
+    if (editing) return editing.ma_hang_muc;
+    return previewMaHangMuc(items, form.ten_hang_muc, form.parent_id, form.loai_giao_dich);
+  }, [editing, items, form.ten_hang_muc, form.parent_id, form.loai_giao_dich]);
 
   function getChildren(parentId: number) {
     return items.filter((i) => i.parent_id === parentId);
   }
 
-  function openCreate() {
+  function applyParentDefaults(parentId: string | number) {
+    if (parentId === '' || parentId == null) return;
+    const parent = items.find((i) => i.id === Number(parentId));
+    if (!parent) return;
+    setForm((f) => ({
+      ...f,
+      parent_id: parentId,
+      loai_giao_dich: parent.loai_giao_dich,
+      pham_vi: parent.pham_vi,
+    }));
+  }
+
+  function openCreate(parentId?: number) {
     setEditing(null);
-    setForm({ ma_hang_muc: '', ten_hang_muc: '', loai_giao_dich: 'tat_ca', pham_vi: 'cong_ty', parent_id: '', trang_thai: 'hoat_dong', ghi_chu: '' });
+    const parent = parentId ? items.find((i) => i.id === parentId) : null;
+    setForm({
+      ma_hang_muc: '',
+      ten_hang_muc: '',
+      loai_giao_dich: parent?.loai_giao_dich ?? 'chi',
+      pham_vi: parent?.pham_vi ?? 'cong_ty',
+      parent_id: parentId ?? '',
+      trang_thai: 'hoat_dong',
+      ghi_chu: '',
+    });
     setModalOpen(true);
   }
 
@@ -671,9 +840,18 @@ function HangMucThuChiSection() {
 
   async function handleSave() {
     if (!form.ten_hang_muc.trim()) { addToast('warning', 'Vui lòng nhập tên hạng mục'); return; }
+    if (newCapDo > 3) {
+      addToast('warning', 'Chỉ hỗ trợ tối đa 3 cấp hạng mục');
+      return;
+    }
     setSaving(true);
     try {
-      const payload = { ...form, parent_id: form.parent_id === '' ? null : Number(form.parent_id) };
+      const payload = {
+        ...form,
+        parent_id: form.parent_id === '' ? null : Number(form.parent_id),
+        cap_do: newCapDo,
+        ...(!editing ? { ma_hang_muc: previewMa || undefined } : {}),
+      };
       if (editing) {
         await hangMucThuChiApi.update(editing.id, payload);
         addToast('success', 'Đã cập nhật hạng mục');
@@ -683,8 +861,10 @@ function HangMucThuChiSection() {
       }
       setModalOpen(false);
       load();
-    } catch { addToast('error', 'Không thể lưu hạng mục'); }
-    finally { setSaving(false); }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Không thể lưu hạng mục';
+      addToast('error', msg);
+    } finally { setSaving(false); }
   }
 
   async function handleDelete() {
@@ -709,6 +889,11 @@ function HangMucThuChiSection() {
             </div>
           </td>
           <td className="table-cell text-xs font-mono text-gray-500">{item.ma_hang_muc}</td>
+          <td className="table-cell text-sm text-gray-600">
+            <span className="inline-flex px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 text-xs" title={CAP_DO_LABEL[getHangMucCapDo(items, item)]}>
+              Cấp {getHangMucCapDo(items, item)}
+            </span>
+          </td>
           <td className="table-cell text-sm text-gray-600">{loaiGdHmLabel(item.loai_giao_dich)}</td>
           <td className="table-cell text-sm text-gray-600">{phamViHmLabel(item.pham_vi)}</td>
           <td className="table-cell">
@@ -739,7 +924,9 @@ function HangMucThuChiSection() {
           <ListTree className="w-5 h-5 text-emerald-600" />
           <div>
             <h2 className="text-lg font-semibold text-gray-900">Hạng mục thu chi</h2>
-            <p className="text-xs text-gray-500 mt-0.5">Phân loại dòng tiền theo nhóm và hạng mục</p>
+            <p className="text-xs text-gray-500 mt-0.5">
+              Cấu trúc 3 cấp: nhóm lớn → nhóm nhỏ → chi tiết (gắn vào giao dịch)
+            </p>
           </div>
         </div>
         <button onClick={openCreate} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-semibold text-white bg-emerald-600 hover:bg-emerald-700 transition-colors">
@@ -759,6 +946,7 @@ function HangMucThuChiSection() {
               <tr>
                 <th className="table-header">Tên hạng mục</th>
                 <th className="table-header">Mã</th>
+                <th className="table-header">Cấp</th>
                 <th className="table-header">Loại giao dịch</th>
                 <th className="table-header">Phạm vi</th>
                 <th className="table-header">Trạng thái</th>
@@ -774,39 +962,90 @@ function HangMucThuChiSection() {
 
       <Modal open={modalOpen} onOpenChange={setModalOpen} title={editing ? 'Chỉnh sửa hạng mục' : 'Thêm hạng mục thu chi'}>
         <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Mã hạng mục</label>
-              <input className="input-field w-full font-mono" value={form.ma_hang_muc} onChange={(e) => setForm((f) => ({ ...f, ma_hang_muc: e.target.value }))} placeholder="VD: CHI.LUONG" />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Hạng mục cha</label>
-              <select className="input-field w-full" value={String(form.parent_id)} onChange={(e) => setForm((f) => ({ ...f, parent_id: e.target.value }))}>
-                <option value="">— Hạng mục gốc —</option>
-                {items.filter((i) => !i.parent_id && (!editing || i.id !== editing.id)).map((i) => (
-                  <option key={i.id} value={String(i.id)}>{i.ten_hang_muc}</option>
-                ))}
-              </select>
-            </div>
+          <div className="rounded-lg bg-slate-50 border border-slate-200 px-3 py-2 text-xs text-slate-600">
+            <strong>Quy trình:</strong> Chọn hạng mục cha (nếu có) → đặt tên → hệ thống sinh mã.
+            Cấp 1–2 là <em>nhóm</em>; cấp 3 là <em>chi tiết</em> dùng khi nhập sao kê.
           </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Hạng mục cha</label>
+            <select
+              className="input-field w-full"
+              value={String(form.parent_id)}
+              onChange={(e) => {
+                const v = e.target.value;
+                if (v === '') {
+                  setForm((f) => ({ ...f, parent_id: '' }));
+                } else {
+                  applyParentDefaults(v);
+                }
+              }}
+            >
+              <option value="">— Cấp 1: Hạng mục gốc (nhóm lớn) —</option>
+              {renderParentSelectOptions(parentOptions)}
+            </select>
+            <p className="mt-1 text-xs text-gray-500">
+              Chỉ hiện hạng mục cấp 1 và 2 — có thể chọn nhóm nhỏ làm cha cho chi tiết cấp 3.
+            </p>
+          </div>
+
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Tên hạng mục <span className="text-red-500">*</span></label>
-            <input className="input-field w-full" value={form.ten_hang_muc} onChange={(e) => setForm((f) => ({ ...f, ten_hang_muc: e.target.value }))} placeholder="VD: Chi lương nhân viên" />
+            <input
+              className="input-field w-full"
+              value={form.ten_hang_muc}
+              onChange={(e) => setForm((f) => ({ ...f, ten_hang_muc: e.target.value }))}
+              placeholder={newCapDo === 3 ? 'VD: Lương nhân viên' : newCapDo === 2 ? 'VD: Chi phí vận hành công ty' : 'VD: Chi phí công ty'}
+            />
           </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Cấp độ</label>
+              <div className="input-field w-full bg-gray-50 text-gray-700 text-sm">
+                {CAP_DO_LABEL[newCapDo] ?? `Cấp ${newCapDo}`}
+              </div>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Mã hạng mục</label>
+              <div className="input-field w-full bg-gray-50 font-mono text-sm text-gray-700">
+                {editing ? form.ma_hang_muc : (previewMa || '— Tự sinh khi lưu —')}
+              </div>
+              {!editing && (
+                <p className="mt-1 text-xs text-gray-500">Mã tự động từ tên + mã cha (VD: CHI.CT.VH.LUNG)</p>
+              )}
+            </div>
+          </div>
+
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Loại giao dịch</label>
-              <select className="input-field w-full" value={form.loai_giao_dich} onChange={(e) => setForm((f) => ({ ...f, loai_giao_dich: e.target.value as LoaiGiaoDich | 'tat_ca' }))}>
+              <select
+                className="input-field w-full"
+                value={form.loai_giao_dich}
+                onChange={(e) => setForm((f) => ({ ...f, loai_giao_dich: e.target.value as LoaiGiaoDich | 'tat_ca' }))}
+                disabled={form.parent_id !== ''}
+              >
                 {LOAI_GD_HM_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
               </select>
+              {form.parent_id !== '' && (
+                <p className="mt-1 text-xs text-violet-600">Kế thừa từ hạng mục cha</p>
+              )}
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Phạm vi</label>
               <select className="input-field w-full" value={form.pham_vi} onChange={(e) => setForm((f) => ({ ...f, pham_vi: e.target.value as PhamViHangMuc }))}>
                 {PHAM_VI_HM_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
               </select>
+              <p className="mt-1 text-xs text-gray-500">Nên trùng phạm vi với nhánh cha (công ty / cá nhân / ô tô…)</p>
             </div>
           </div>
+
+          {newCapDo < 3 && (
+            <p className="text-xs text-amber-700 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
+              Đây là hạng mục nhóm — khi nhập dòng tiền hãy chọn hạng mục <strong>cấp 3</strong> (lá) bên dưới nhóm này.
+            </p>
+          )}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Trạng thái</label>
             <select className="input-field w-full" value={form.trang_thai} onChange={(e) => setForm((f) => ({ ...f, trang_thai: e.target.value }))}>
@@ -835,220 +1074,26 @@ function HangMucThuChiSection() {
   );
 }
 
-// ─── Migration Section ───────────────────────────────────────────────────────
+// ─── Settings tabs ───────────────────────────────────────────────────────────
 
-type MigStep = 'idle' | 'running' | 'done' | 'error';
+type CaiDatTab =
+  | 'mau-bao-gia'
+  | 'google-drive'
+  | 'tai-khoan-tien'
+  | 'hang-muc'
+  | 'nguoi-dung'
+  | 'tai-khoan'
+  | 'he-thong';
 
-interface StepResult {
-  label: string;
-  status: 'ok' | 'error' | 'skipped';
-  detail?: string;
-}
-
-interface MigStepState {
-  status: MigStep;
-  results: StepResult[];
-  expanded: boolean;
-}
-
-const MIGRATE_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/mysql-migrate`;
-
-function MigrationSection() {
-  const addToast = useToastStore((s) => s.addToast);
-  const [running, setRunning] = useState(false);
-  const [steps, setSteps] = useState<{ schema: MigStepState; seed: MigStepState; migrate: MigStepState }>({
-    schema:  { status: 'idle', results: [], expanded: false },
-    seed:    { status: 'idle', results: [], expanded: false },
-    migrate: { status: 'idle', results: [], expanded: false },
-  });
-  const [migrateOffset, setMigrateOffset] = useState(0);
-  const [migrateTotal, setMigrateTotal] = useState<number | null>(null);
-  const [migrateDone, setMigrateDone] = useState(false);
-
-  function updateStep(key: keyof typeof steps, patch: Partial<MigStepState>) {
-    setSteps((prev) => ({ ...prev, [key]: { ...prev[key], ...patch } }));
-  }
-
-  async function callMigrate(action: string, extra = '') {
-    const res = await fetch(`${MIGRATE_URL}?action=${action}${extra}`, { method: 'GET' });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return res.json();
-  }
-
-  async function runAll() {
-    setRunning(true);
-    setMigrateOffset(0);
-    setMigrateTotal(null);
-    setMigrateDone(false);
-    setSteps({
-      schema:  { status: 'idle', results: [], expanded: false },
-      seed:    { status: 'idle', results: [], expanded: false },
-      migrate: { status: 'idle', results: [], expanded: false },
-    });
-
-    // Step 1: schema
-    updateStep('schema', { status: 'running' });
-    try {
-      const data = await callMigrate('schema');
-      const results: StepResult[] = (data.results ?? []).map((r: any) => ({
-        label: r.sql ?? r.item ?? String(r),
-        status: r.status === 'ok' ? 'ok' : 'error',
-        detail: r.error,
-      }));
-      const hasError = results.some((r) => r.status === 'error');
-      updateStep('schema', { status: hasError ? 'error' : 'done', results });
-      if (hasError) { addToast('warning', 'Tạo schema có lỗi, xem chi tiết bên dưới'); }
-    } catch (e: any) {
-      updateStep('schema', { status: 'error', results: [{ label: 'Kết nối thất bại', status: 'error', detail: e.message }] });
-      addToast('error', 'Không thể tạo schema: ' + e.message);
-      setRunning(false);
-      return;
-    }
-
-    // Step 2: seed
-    updateStep('seed', { status: 'running' });
-    try {
-      const data = await callMigrate('seed');
-      const results: StepResult[] = (data.results ?? []).map((r: any) => ({
-        label: r.item ?? String(r),
-        status: r.status === 'ok' ? 'ok' : r.status === 'skipped (already has data)' || String(r.status).startsWith('skipped') ? 'skipped' : 'error',
-        detail: r.error,
-      }));
-      updateStep('seed', { status: 'done', results });
-    } catch (e: any) {
-      updateStep('seed', { status: 'error', results: [{ label: 'Seed thất bại', status: 'error', detail: e.message }] });
-      addToast('error', 'Không thể seed dữ liệu: ' + e.message);
-      setRunning(false);
-      return;
-    }
-
-    // Step 3: migrate (batch until done)
-    updateStep('migrate', { status: 'running' });
-    let offset = 0;
-    const allResults: StepResult[] = [];
-    let totalSuccess = 0;
-    let totalErrors = 0;
-    try {
-      while (true) {
-        const data = await callMigrate('migrate', `&offset=${offset}&batch_size=500`);
-        if (data.total !== undefined) setMigrateTotal(data.total);
-        totalSuccess += data.success ?? 0;
-        totalErrors += data.errors ?? 0;
-        offset += data.rows_processed ?? 0;
-        setMigrateOffset(offset);
-
-        if ((data.errors ?? 0) > 0 && data.error_details) {
-          for (const e of data.error_details.slice(0, 5)) {
-            allResults.push({ label: `ID ${e.id}: ${e.error}`, status: 'error' });
-          }
-        }
-
-        if (data.rows_processed === 0 || (data.total !== undefined && offset >= data.total)) break;
-      }
-      allResults.unshift({ label: `Đã migrate ${totalSuccess} bản ghi, ${totalErrors} lỗi`, status: totalErrors > 0 ? 'error' : 'ok' });
-      updateStep('migrate', { status: 'done', results: allResults });
-      setMigrateDone(true);
-      addToast('success', `Migration hoàn tất! ${totalSuccess} giao dịch đã chuyển.`);
-    } catch (e: any) {
-      updateStep('migrate', { status: 'error', results: [{ label: 'Migration thất bại', status: 'error', detail: e.message }] });
-      addToast('error', 'Migration thất bại: ' + e.message);
-    }
-    setRunning(false);
-  }
-
-  const STEP_LABELS = { schema: 'Tạo bảng mới', seed: 'Seed dữ liệu gốc', migrate: 'Chuyển dòng tiền cũ' };
-
-  function StepCard({ stepKey }: { stepKey: keyof typeof steps }) {
-    const step = steps[stepKey];
-    const icon = step.status === 'running' ? (
-      <RefreshCw className="w-4 h-4 text-blue-500 animate-spin" />
-    ) : step.status === 'done' ? (
-      <CheckCircle className="w-4 h-4 text-emerald-500" />
-    ) : step.status === 'error' ? (
-      <AlertCircle className="w-4 h-4 text-red-500" />
-    ) : (
-      <div className="w-4 h-4 rounded-full border-2 border-gray-300" />
-    );
-
-    return (
-      <div className={`rounded-lg border ${step.status === 'error' ? 'border-red-200 bg-red-50' : step.status === 'done' ? 'border-emerald-200 bg-emerald-50' : step.status === 'running' ? 'border-blue-200 bg-blue-50' : 'border-gray-200 bg-gray-50'}`}>
-        <button
-          className="w-full flex items-center gap-3 px-4 py-3 text-left"
-          onClick={() => updateStep(stepKey, { expanded: !step.expanded })}
-          disabled={step.results.length === 0}
-        >
-          {icon}
-          <span className="flex-1 text-sm font-medium text-gray-800">{STEP_LABELS[stepKey]}</span>
-          {stepKey === 'migrate' && step.status === 'running' && migrateTotal !== null && (
-            <span className="text-xs text-blue-600 font-mono">{migrateOffset}/{migrateTotal}</span>
-          )}
-          {step.status === 'done' && (
-            <span className="text-xs text-emerald-600 font-medium">
-              {step.results.filter((r) => r.status === 'ok').length} OK
-              {step.results.filter((r) => r.status === 'error').length > 0 && ` · ${step.results.filter((r) => r.status === 'error').length} lỗi`}
-            </span>
-          )}
-          {step.results.length > 0 && <ChevronDown className={`w-4 h-4 text-gray-400 transition-transform ${step.expanded ? 'rotate-180' : ''}`} />}
-        </button>
-        {step.expanded && step.results.length > 0 && (
-          <div className="border-t border-gray-200 px-4 py-3 space-y-1 max-h-48 overflow-y-auto">
-            {step.results.map((r, i) => (
-              <div key={i} className="flex items-start gap-2">
-                <span className={`text-xs mt-0.5 font-mono ${r.status === 'ok' ? 'text-emerald-600' : r.status === 'skipped' ? 'text-amber-600' : 'text-red-600'}`}>
-                  {r.status === 'ok' ? '✓' : r.status === 'skipped' ? '~' : '✗'}
-                </span>
-                <div className="text-xs text-gray-600 min-w-0">
-                  <span className="truncate block">{r.label}</span>
-                  {r.detail && <span className="text-red-500 block">{r.detail}</span>}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  return (
-    <div className="bg-white rounded-xl border border-gray-200">
-      <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <Database className="w-5 h-5 text-orange-500" />
-          <div>
-            <h2 className="text-lg font-semibold text-gray-900">Migration dữ liệu</h2>
-            <p className="text-xs text-gray-500 mt-0.5">
-              Chuyển dữ liệu từ bảng cũ (tai_khoan, dong_tien) sang bảng mới (tai_khoan_tien, dong_tien_moi)
-            </p>
-          </div>
-        </div>
-        <button
-          onClick={runAll}
-          disabled={running}
-          className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${
-            running ? 'bg-gray-100 text-gray-400 cursor-not-allowed' :
-            migrateDone ? 'bg-emerald-600 text-white hover:bg-emerald-700' :
-            'bg-orange-500 text-white hover:bg-orange-600'
-          }`}
-        >
-          {running ? <RefreshCw className="w-4 h-4 animate-spin" /> : migrateDone ? <CheckCircle className="w-4 h-4" /> : <Database className="w-4 h-4" />}
-          {running ? 'Đang chạy...' : migrateDone ? 'Chạy lại' : 'Chạy Migration'}
-        </button>
-      </div>
-
-      <div className="px-6 py-5 space-y-3">
-        <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 flex items-start gap-2">
-          <AlertCircle className="w-4 h-4 text-amber-500 mt-0.5 flex-shrink-0" />
-          <p className="text-xs text-amber-700">
-            Migration sẽ tạo các bảng mới, seed danh mục, rồi chuyển toàn bộ dữ liệu từ bảng cũ sang. Quá trình có thể mất vài phút tùy lượng dữ liệu. Dữ liệu cũ không bị xóa.
-          </p>
-        </div>
-        <StepCard stepKey="schema" />
-        <StepCard stepKey="seed" />
-        <StepCard stepKey="migrate" />
-      </div>
-    </div>
-  );
-}
+const CAI_DAT_TABS: { id: CaiDatTab; label: string; icon: typeof Settings; adminOnly?: boolean }[] = [
+  { id: 'mau-bao-gia', label: 'Mẫu báo giá', icon: FileSpreadsheet, adminOnly: true },
+  { id: 'google-drive', label: 'Google Drive', icon: HardDrive },
+  { id: 'tai-khoan-tien', label: 'Tài khoản tiền', icon: Wallet, adminOnly: true },
+  { id: 'hang-muc', label: 'Hạng mục thu chi', icon: ListTree, adminOnly: true },
+  { id: 'nguoi-dung', label: 'Người dùng', icon: Users, adminOnly: true },
+  { id: 'tai-khoan', label: 'Tài khoản', icon: User },
+  { id: 'he-thong', label: 'Hệ thống', icon: Settings },
+];
 
 // ─── Main component ──────────────────────────────────────────────────────────
 
@@ -1066,19 +1111,32 @@ export default function CaiDatPage() {
 
   const [displayName, setDisplayName] = useState('');
   const [savingName, setSavingName] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [savingPassword, setSavingPassword] = useState(false);
 
+  const visibleTabs = CAI_DAT_TABS.filter((t) => !t.adminOnly || isAdmin());
+  const [activeTab, setActiveTab] = useState<CaiDatTab>('google-drive');
+
+  useEffect(() => {
+    if (!visibleTabs.some((t) => t.id === activeTab)) {
+      setActiveTab(visibleTabs[0]?.id ?? 'google-drive');
+    }
+  }, [activeTab, visibleTabs]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('drive_connected') === '1' || params.get('drive_error')) {
+      setActiveTab('google-drive');
+    }
+  }, []);
+
   const fetchUsers = useCallback(async () => {
     setLoadingUsers(true);
     try {
-      const { data, error } = await supabase
-        .from('user_profiles')
-        .select('id, email, ten, role, created_at')
-        .order('created_at', { ascending: true });
-      if (error) throw error;
-      setUsers((data as UserProfileRow[]) || []);
+      const res = await usersApi.list();
+      setUsers((res.data as UserProfileRow[]) || []);
     } catch (err) {
       console.error('Loi tai danh sach nguoi dung:', err);
       addToast('error', 'Không thể tải danh sách người dùng');
@@ -1097,11 +1155,7 @@ export default function CaiDatPage() {
     const newRole = user.role === 'admin' ? 'staff' : 'admin';
     setChangingRole(user.id);
     try {
-      const { error } = await supabase
-        .from('user_profiles')
-        .update({ role: newRole })
-        .eq('id', user.id);
-      if (error) throw error;
+      await usersApi.update(user.id, { role: newRole });
       addToast('success', `Đã chuyển vai trò của ${user.ten || user.email} thành ${newRole === 'admin' ? 'Quản trị' : 'Nhân viên'}`);
       fetchUsers();
       if (currentUser && user.id === currentUser.id) setUser({ ...currentUser, role: newRole });
@@ -1125,8 +1179,7 @@ export default function CaiDatPage() {
   async function handleDeleteUser() {
     if (!deleteTarget) return;
     try {
-      const { error } = await supabase.auth.admin.deleteUser(deleteTarget.id);
-      if (error) throw error;
+      await usersApi.delete(deleteTarget.id);
       addToast('success', `Đã xóa người dùng ${deleteTarget.ten || deleteTarget.email}`);
       fetchUsers();
     } catch (err) {
@@ -1140,11 +1193,7 @@ export default function CaiDatPage() {
     if (!currentUser) return;
     setSavingName(true);
     try {
-      const { error } = await supabase
-        .from('user_profiles')
-        .update({ ten: displayName.trim() })
-        .eq('id', currentUser.id);
-      if (error) throw error;
+      await usersApi.update(currentUser.id, { ten: displayName.trim() });
       setUser({ ...currentUser, ten: displayName.trim() });
       addToast('success', 'Đã cập nhật tên hiển thị');
       fetchUsers();
@@ -1157,14 +1206,15 @@ export default function CaiDatPage() {
   }
 
   async function handleChangePassword() {
+    if (!currentPassword) { addToast('warning', 'Vui lòng nhập mật khẩu hiện tại'); return; }
     if (!newPassword) { addToast('warning', 'Vui lòng nhập mật khẩu mới'); return; }
     if (newPassword.length < 6) { addToast('warning', 'Mật khẩu mới phải có ít nhất 6 ký tự'); return; }
     if (newPassword !== confirmPassword) { addToast('warning', 'Mật khẩu xác nhận không khớp'); return; }
     setSavingPassword(true);
     try {
-      const { error } = await supabase.auth.updateUser({ password: newPassword });
-      if (error) throw error;
+      await usersApi.changePassword({ currentPassword, newPassword });
       addToast('success', 'Đã thay đổi mật khẩu thành công');
+      setCurrentPassword('');
       setNewPassword('');
       setConfirmPassword('');
     } catch (err: any) {
@@ -1196,41 +1246,54 @@ export default function CaiDatPage() {
         </div>
       </div>
 
-      {/* ─── Template Upload (Admin only) ──────────────────────────────────── */}
-      {isAdmin() && (
-        <div className="bg-white rounded-xl border border-gray-200">
-          <div className="px-6 py-4 border-b border-gray-200">
-            <div className="flex items-center gap-2">
-              <FileSpreadsheet className="w-5 h-5 text-green-600" />
+      {/* Tabs */}
+      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+        <div className="border-b border-gray-200">
+          <nav className="flex gap-0 overflow-x-auto px-2" aria-label="Cài đặt">
+            {visibleTabs.map((tab) => {
+              const Icon = tab.icon;
+              return (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => setActiveTab(tab.id)}
+                  className={`flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 whitespace-nowrap transition-colors ${
+                    activeTab === tab.id
+                      ? 'border-primary-600 text-primary-600'
+                      : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                  }`}
+                >
+                  <Icon className="w-4 h-4 flex-shrink-0" />
+                  {tab.label}
+                </button>
+              );
+            })}
+          </nav>
+        </div>
+
+        <div className="p-6">
+          {activeTab === 'mau-bao-gia' && isAdmin() && (
+            <div className="space-y-4">
               <div>
                 <h2 className="text-lg font-semibold text-gray-900">Mẫu báo giá Excel</h2>
                 <p className="text-xs text-gray-500 mt-0.5">Upload file Excel mẫu để xuất báo giá theo từng loại</p>
               </div>
+              <div className="space-y-3">
+                {MAU_KEYS.map((m) => (
+                  <TemplateUploadCard key={m.key} configKey={m.key} label={m.label} />
+                ))}
+              </div>
             </div>
-          </div>
-          <div className="px-6 py-5 space-y-3">
-            {MAU_KEYS.map((m) => (
-              <TemplateUploadCard key={m.key} configKey={m.key} label={m.label} />
-            ))}
-          </div>
-        </div>
-      )}
+          )}
 
-      {/* ─── Google Drive ──────────────────────────────────────────────────── */}
-      <GoogleDriveCard />
+          {activeTab === 'google-drive' && <GoogleDriveCard />}
 
-      {/* ─── Migration (Admin only) ────────────────────────────────────────── */}
-      {isAdmin() && <MigrationSection />}
+          {activeTab === 'tai-khoan-tien' && isAdmin() && <TaiKhoanTienSection />}
 
-      {/* ─── TaiKhoanTien Management (Admin only) ──────────────────────────── */}
-      {isAdmin() && <TaiKhoanTienSection />}
+          {activeTab === 'hang-muc' && isAdmin() && <HangMucThuChiSection />}
 
-      {/* ─── HangMucThuChi Management (Admin only) ─────────────────────────── */}
-      {isAdmin() && <HangMucThuChiSection />}
-
-      {/* ─── User Management (Admin only) ──────────────────────────────────── */}
-      {isAdmin() && (
-        <div className="bg-white rounded-xl border border-gray-200">
+          {activeTab === 'nguoi-dung' && isAdmin() && (
+        <div>
           <div className="px-6 py-4 border-b border-gray-200 flex items-center gap-2">
             <Users className="w-5 h-5 text-gray-500" />
             <h2 className="text-lg font-semibold text-gray-900">Quản lý người dùng</h2>
@@ -1314,15 +1377,15 @@ export default function CaiDatPage() {
             </div>
           )}
         </div>
-      )}
+          )}
 
-      {/* ─── Account Settings ──────────────────────────────────────────────── */}
-      <div className="bg-white rounded-xl border border-gray-200">
-        <div className="px-6 py-4 border-b border-gray-200 flex items-center gap-2">
-          <User className="w-5 h-5 text-gray-500" />
-          <h2 className="text-lg font-semibold text-gray-900">Thiết lập tài khoản</h2>
-        </div>
-        <div className="px-6 py-5 space-y-6">
+          {activeTab === 'tai-khoan' && (
+        <div className="space-y-6">
+          <div>
+            <h2 className="text-lg font-semibold text-gray-900">Thiết lập tài khoản</h2>
+            <p className="text-xs text-gray-500 mt-0.5">Cập nhật tên hiển thị và mật khẩu đăng nhập</p>
+          </div>
+          <div className="space-y-6">
           <div>
             <h3 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
               <User className="w-4 h-4" />
@@ -1349,6 +1412,12 @@ export default function CaiDatPage() {
             </h3>
             <div className="space-y-3 max-w-md">
               <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Mật khẩu hiện tại</label>
+                <input type="password" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)}
+                  className="input-field w-full" placeholder="Nhập mật khẩu hiện tại"
+                  autoComplete="current-password" />
+              </div>
+              <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Mật khẩu mới</label>
                 <input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)}
                   className="input-field w-full" placeholder="Nhập mật khẩu mới (ít nhất 6 ký tự)"
@@ -1365,16 +1434,16 @@ export default function CaiDatPage() {
               </button>
             </div>
           </div>
+          </div>
         </div>
-      </div>
+          )}
 
-      {/* ─── System Info ───────────────────────────────────────────────────── */}
-      <div className="bg-white rounded-xl border border-gray-200">
-        <div className="px-6 py-4 border-b border-gray-200 flex items-center gap-2">
-          <Settings className="w-5 h-5 text-gray-500" />
-          <h2 className="text-lg font-semibold text-gray-900">Thông tin hệ thống</h2>
-        </div>
-        <div className="px-6 py-5">
+          {activeTab === 'he-thong' && (
+        <div className="space-y-4">
+          <div>
+            <h2 className="text-lg font-semibold text-gray-900">Thông tin hệ thống</h2>
+            <p className="text-xs text-gray-500 mt-0.5">Phiên bản và thông tin ứng dụng</p>
+          </div>
           <div className="space-y-3">
             <div className="flex items-center justify-between py-2 border-b border-gray-100">
               <span className="text-sm text-gray-500">Tên ứng dụng</span>
@@ -1386,9 +1455,11 @@ export default function CaiDatPage() {
             </div>
             <div className="flex items-center justify-between py-2">
               <span className="text-sm text-gray-500">Cơ sở dữ liệu</span>
-              <span className="text-sm font-medium text-gray-900">Supabase PostgreSQL</span>
+              <span className="text-sm font-medium text-gray-900">MySQL / MariaDB</span>
             </div>
           </div>
+        </div>
+          )}
         </div>
       </div>
 

@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useParams } from 'react-router-dom';
 import { useAuthStore } from './store/auth';
 import AppLayout from './components/layout/AppLayout';
 import ProtectedRoute from './components/shared/ProtectedRoute';
@@ -26,8 +26,15 @@ import HopDongMuaDetail from './pages/hop-dong-mua/HopDongMuaDetail';
 import HoaDonNhapList from './pages/hoa-don-nhap/HoaDonNhapList';
 import VatTuList from './pages/vat-tu/VatTuList';
 import BaoCaoPage from './pages/bao-cao/BaoCaoPage';
+import PhanTichDongTienPage from './pages/bao-cao/PhanTichDongTienPage';
 import TaiKhoanList from './pages/tai-khoan/TaiKhoanList';
 import CaiDatPage from './pages/cai-dat/CaiDatPage';
+import DanhMucLayout from './components/layout/DanhMucLayout';
+
+function RedirectKhachHangDetail() {
+  const { id } = useParams();
+  return <Navigate to={`/danh-muc/khach-hang/${id ?? ''}`} replace />;
+}
 
 function App() {
   const initialize = useAuthStore((s) => s.initialize);
@@ -37,14 +44,26 @@ function App() {
   }, [initialize]);
 
   return (
-    <BrowserRouter>
+    <BrowserRouter
+      future={{
+        v7_startTransition: true,
+        v7_relativeSplatPath: true,
+      }}
+    >
       <Routes>
         <Route path="/login" element={<LoginPage />} />
         <Route element={<ProtectedRoute />}>
           <Route element={<AppLayout />}>
             <Route path="/dashboard" element={<DashboardPage />} />
-            <Route path="/khach-hang" element={<KhachHangList />} />
-            <Route path="/khach-hang/:id" element={<KhachHangDetail />} />
+            <Route path="/danh-muc" element={<DanhMucLayout />}>
+              <Route index element={<Navigate to="khach-hang" replace />} />
+              <Route path="khach-hang" element={<KhachHangList />} />
+              <Route path="khach-hang/:id" element={<KhachHangDetail />} />
+              <Route path="nha-cung-cap" element={<NhaCungCapList />} />
+              <Route path="tai-khoan" element={<TaiKhoanList />} />
+            </Route>
+            <Route path="/khach-hang" element={<Navigate to="/danh-muc/khach-hang" replace />} />
+            <Route path="/khach-hang/:id" element={<RedirectKhachHangDetail />} />
             <Route path="/bao-gia" element={<BaoGiaList />} />
             <Route path="/bao-gia/tao-moi" element={<BaoGiaCreate />} />
             <Route path="/bao-gia/:id" element={<BaoGiaDetail />} />
@@ -57,14 +76,15 @@ function App() {
             <Route path="/dong-tien-moi" element={<DongTienMoiList />} />
             <Route path="/cong-no" element={<CongNoPage />} />
             <Route path="/chi-phi" element={<ChiPhiPage />} />
-            <Route path="/nha-cung-cap" element={<NhaCungCapList />} />
+            <Route path="/nha-cung-cap" element={<Navigate to="/danh-muc/nha-cung-cap" replace />} />
             <Route path="/hop-dong-mua" element={<HopDongMuaList />} />
             <Route path="/hop-dong-mua/tao-moi" element={<HopDongMuaCreate />} />
             <Route path="/hop-dong-mua/:id" element={<HopDongMuaDetail />} />
             <Route path="/hoa-don-nhap" element={<HoaDonNhapList />} />
             <Route path="/vat-tu" element={<VatTuList />} />
             <Route path="/bao-cao" element={<BaoCaoPage />} />
-            <Route path="/tai-khoan" element={<TaiKhoanList />} />
+            <Route path="/phan-tich-dong-tien" element={<PhanTichDongTienPage />} />
+            <Route path="/tai-khoan" element={<Navigate to="/danh-muc/tai-khoan" replace />} />
             <Route path="/cai-dat" element={<CaiDatPage />} />
             <Route path="/" element={<Navigate to="/dashboard" replace />} />
           </Route>

@@ -2,7 +2,13 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { dongTienApi, taiKhoanApi, khachHangApi, nhaCungCapApi, hopDongApi, hopDongMuaApi, loaiChiPhiApi, chiPhiApi, chiPhiCuTheApi } from '../../lib/api';
 import { useToastStore } from '../../store/toast';
 import { useAuthStore } from '../../store/auth';
-import { formatVND, formatDate, toInputDateValue, getTodayInputValue } from '../../lib/utils';
+import {
+  formatVND,
+  formatDate,
+  toInputDateValue,
+  getTodayInputValue,
+  parseExcelNum,
+} from '../../lib/utils';
 import Modal from '../../components/ui/Modal';
 import Pagination from '../../components/ui/Pagination';
 import ConfirmDialog from '../../components/ui/ConfirmDialog';
@@ -104,54 +110,6 @@ interface ExcelRow {
   chi_phi_id: string;
   chi_phi_cu_the_id: string;
   ghi_chu: string;
-}
-
-// Parse a number string from bank Excel export.
-// Format: "50,763,840" (commas = thousands sep, no decimal) OR "1,234.56" (comma=thousands, dot=decimal)
-function parseExcelNum(s: string): number {
-  if (!s || !s.trim()) return 0;
-  const raw = s.trim();
-  // Remove all non-numeric except digits, minus, comma, dot
-  const stripped = raw.replace(/[^\d\-.,]/g, '');
-  if (!stripped) return 0;
-  // Detect format: if commas appear every 3 digits (thousands sep) → remove commas
-  // Case 1: "50,763,840" — all commas are thousands seps
-  // Case 2: "1,234.56" — comma=thousands, dot=decimal
-  // Case 3: "1.234,56" — dot=thousands, comma=decimal (European — less common in VN bank exports)
-  const lastComma = stripped.lastIndexOf(',');
-  const lastDot = stripped.lastIndexOf('.');
-  let normalized: string;
-  if (lastDot === -1 && lastComma === -1) {
-    // Pure integer
-    normalized = stripped;
-  } else if (lastDot === -1) {
-    // Only commas present — check if last comma segment has exactly 2-3 digits (decimal) or is thousands sep
-    const afterLastComma = stripped.slice(lastComma + 1);
-    if (afterLastComma.length <= 2) {
-      // European decimal: "1234,56"
-      normalized = stripped.replace(/,/g, '.').replace(/(\.)(?=.*\.)/g, '');
-    } else {
-      // Thousands separators only: "50,763,840"
-      normalized = stripped.replace(/,/g, '');
-    }
-  } else if (lastComma === -1) {
-    // Only dots present — standard decimal or dot thousands
-    const afterLastDot = stripped.slice(lastDot + 1);
-    if (afterLastDot.length === 3 && stripped.indexOf('.') !== lastDot) {
-      // Multiple dots as thousands seps: "1.234.567"
-      normalized = stripped.replace(/\./g, '');
-    } else {
-      normalized = stripped;
-    }
-  } else if (lastComma > lastDot) {
-    // Comma after dot → European: dot=thousands, comma=decimal: "1.234,56"
-    normalized = stripped.replace(/\./g, '').replace(',', '.');
-  } else {
-    // Dot after comma → standard: comma=thousands, dot=decimal: "1,234.56"
-    normalized = stripped.replace(/,/g, '');
-  }
-  const n = parseFloat(normalized);
-  return isNaN(n) ? 0 : n;
 }
 
 // Parse date from Excel: accepts "26/05/2026 15:21:12", "26/05/2026", "2026-05-26", etc.
@@ -275,6 +233,14 @@ export default function DongTienList() {
   const [khDropMap, setKhDropMap] = useState<Record<number, boolean>>({});
   const [khResultsMap, setKhResultsMap] = useState<Record<number, KhachHang[]>>({});
   const khSearchTimers = useRef<Record<number, ReturnType<typeof setTimeout>>>({});
+
+  function resetImportTagMaps() {
+    setKhSearchMap({});
+    setKhDropMap({});
+    setKhResultsMap({});
+    setCopyDownOpen(null);
+    setCopyDownCount(1);
+  }
 
   function searchKhForRow(stt: number, q: string) {
     if (khSearchTimers.current[stt]) clearTimeout(khSearchTimers.current[stt]);
@@ -564,6 +530,7 @@ export default function DongTienList() {
       addToast('warning', 'Không tìm thấy dữ liệu hợp lệ');
       return;
     }
+    resetImportTagMaps();
     setExcelRows(rows);
     addToast('success', `Đã bóc tách ${rows.length} dòng`);
   }
@@ -649,10 +616,9 @@ export default function DongTienList() {
       if (successCount > 0) addToast('success', `Đã nhập ${successCount} giao dịch thành công${errorCount > 0 ? `, ${errorCount} lỗi` : ''}`);
       else addToast('error', `Không nhập được giao dịch nào`);
 
-      setShowImport(false);
+      resetImportTagMaps();
       setPasteText('');
       setExcelRows([]);
-      setImportTaiKhoanId('');
       fetchDongTien();
     } catch (err) {
       console.error('Import error:', err);
@@ -698,7 +664,7 @@ export default function DongTienList() {
               <FileSpreadsheet className="w-5 h-5 text-white" />
               <h2 className="text-sm font-bold text-white uppercase tracking-wide">Nhập liệu & gắn tag chi phí dòng tiền</h2>
             </div>
-            <button onClick={() => { setShowImport(false); setPasteText(''); setExcelRows([]); }} className="text-teal-100 hover:text-white transition-colors p-1">
+            <button onClick={() => { setShowImport(false); setPasteText(''); setExcelRows([]); resetImportTagMaps(); }} className="text-teal-100 hover:text-white transition-colors p-1">
               <X className="w-5 h-5" />
             </button>
           </div>
@@ -761,7 +727,7 @@ export default function DongTienList() {
                     </span>
                   </label>
                   <button
-                    onClick={() => { setPasteText(''); setExcelRows([]); setCopyDownOpen(null); }}
+                    onClick={() => { setPasteText(''); setExcelRows([]); resetImportTagMaps(); }}
                     className="text-xs text-gray-400 hover:text-red-500 transition-colors flex items-center gap-1"
                   >
                     <X className="w-3 h-3" />
@@ -1016,7 +982,7 @@ export default function DongTienList() {
               <span className="text-xs text-amber-600 font-medium">Vui lòng chọn tài khoản trước</span>
             )}
             <button
-              onClick={() => { setShowImport(false); setPasteText(''); setExcelRows([]); }}
+              onClick={() => { setShowImport(false); setPasteText(''); setExcelRows([]); resetImportTagMaps(); }}
               className="ml-auto flex items-center gap-2 px-4 py-2 text-sm text-gray-600 hover:text-gray-800 border border-gray-300 rounded-lg hover:bg-gray-100 transition-colors"
             >
               <X className="w-4 h-4" />

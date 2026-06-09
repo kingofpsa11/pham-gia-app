@@ -205,7 +205,7 @@ export default function KhachHangList() {
                     <tr
                       key={kh.id}
                       className="hover:bg-gray-50 transition-colors cursor-pointer"
-                      onClick={() => navigate(`/khach-hang/${kh.id}`)}
+                      onClick={() => navigate(`/danh-muc/khach-hang/${kh.id}`)}
                     >
                       <td className="table-cell">
                         <span className="font-medium text-gray-900">{kh.ten_cong_ty}</span>

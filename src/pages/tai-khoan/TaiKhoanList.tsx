@@ -7,6 +7,7 @@ import Modal from '../../components/ui/Modal';
 import ConfirmDialog from '../../components/ui/ConfirmDialog';
 import EmptyState from '../../components/ui/EmptyState';
 import { CreditCard, Plus, Pencil, Trash2, ChevronDown, ChevronRight, Wallet, Banknote, Smartphone } from 'lucide-react';
+import { ckBalanceDelta, resolveCkChieu } from '../../lib/dongTienCk';
 import type { TaiKhoanTien, DongTienMoi } from '../../types';
 
 interface TaiKhoanWithBalance extends TaiKhoanTien {
@@ -88,8 +89,8 @@ export default function TaiKhoanList() {
             if (dt.loai_giao_dich === 'thu') return sum + amt;
             if (dt.loai_giao_dich === 'chi') return sum - amt;
             if (dt.loai_giao_dich === 'chuyen_khoan_noi_bo') {
-              if (String(dt.tai_khoan_tien_id) === String(tk.id)) return sum - amt;
-              if (String(dt.tai_khoan_nhan_id) === String(tk.id)) return sum + amt;
+              const chieu = resolveCkChieu(dt, list, rows || []);
+              return sum + ckBalanceDelta(dt, tk.id, chieu);
             }
             return sum;
           }, Number(tk.so_du_dau_ky) || 0);
@@ -359,7 +360,11 @@ export default function TaiKhoanList() {
                                     </tr>
                                   </thead>
                                   <tbody className="divide-y divide-gray-200">
-                                    {transactions.map((dt) => (
+                                    {transactions.map((dt) => {
+                                      const ckChieu = dt.loai_giao_dich === 'chuyen_khoan_noi_bo'
+                                        ? resolveCkChieu(dt, data, transactions)
+                                        : null;
+                                      return (
                                       <tr key={dt.id} className="hover:bg-gray-50 transition-colors">
                                         <td className="table-cell whitespace-nowrap text-sm">{formatDate(dt.ngay_giao_dich)}</td>
                                         <td className="table-cell">
@@ -376,13 +381,14 @@ export default function TaiKhoanList() {
                                         <td className="table-cell text-sm">{dt.mo_ta_giao_dich || '—'}</td>
                                         <td className="table-cell text-sm text-gray-500">{dt.ten_hang_muc || '—'}</td>
                                         <td className="table-cell text-right text-sm font-medium text-green-600">
-                                          {dt.loai_giao_dich === 'thu' ? formatVND(dt.so_tien) : '—'}
+                                          {dt.loai_giao_dich === 'thu' || ckChieu === 'thu' ? formatVND(dt.so_tien) : '—'}
                                         </td>
                                         <td className="table-cell text-right text-sm font-medium text-red-600">
-                                          {dt.loai_giao_dich === 'chi' ? formatVND(dt.so_tien) : '—'}
+                                          {dt.loai_giao_dich === 'chi' || ckChieu === 'chi' ? formatVND(dt.so_tien) : '—'}
                                         </td>
                                       </tr>
-                                    ))}
+                                      );
+                                    })}
                                   </tbody>
                                 </table>
                               </div>

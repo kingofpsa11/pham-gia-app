@@ -1,11 +1,19 @@
-import { useState, useEffect } from 'react';
-import { phieuGiaoHangApi, dongTienApi, tepDinhKemApi, khachHangApi, hopDongApi } from '../../lib/api';
+import { useState, useEffect, useMemo } from 'react';
+import { phieuGiaoHangApi, dongTienMoiApi, tepDinhKemApi, khachHangApi, hopDongApi } from '../../lib/api';
 import { useToastStore } from '../../store/toast';
 import { useNavigate, useParams, Link } from 'react-router-dom';
 import {
   formatDate,
+  formatDateTime,
   formatNumber,
+  formatPercent,
+  formatVND,
   toInputDateValue,
+  calcThanhTienBan,
+  calcVAT,
+  calcTongTruocVAT,
+  calcTongVAT,
+  calcTongThanhToan,
 } from '../../lib/utils';
 import Modal from '../../components/ui/Modal';
 import {
@@ -14,7 +22,6 @@ import {
   Paperclip,
   Truck,
   CreditCard,
-  Plus,
   X,
 } from 'lucide-react';
 import type {
@@ -22,10 +29,22 @@ import type {
   PhieuGiaoHangChiTiet,
   KhachHang,
   HopDong,
-  DongTien,
+  DongTienMoi,
   TepDinhKem,
   HopDongChiTiet,
 } from '../../types';
+
+function isDongTienThu(dt: DongTienMoi): boolean {
+  if (dt.loai_giao_dich === 'thu') return true;
+  if (dt.loai_giao_dich === 'chuyen_khoan_noi_bo' && dt.chieu_tien === 'thu') return true;
+  return false;
+}
+
+function isDongTienChi(dt: DongTienMoi): boolean {
+  if (dt.loai_giao_dich === 'chi') return true;
+  if (dt.loai_giao_dich === 'chuyen_khoan_noi_bo' && dt.chieu_tien === 'chi') return true;
+  return false;
+}
 
 interface PhieuGiaoHangFull extends PhieuGiaoHang {
   khach_hang?: KhachHang;
@@ -39,6 +58,7 @@ interface LineItem {
   hop_dong_chi_tiet_id?: number;
   ten_san_pham: string;
   don_vi: string;
+  gia_hop_dong?: number;
   so_luong_hop_dong?: number;
   da_giao_khac?: number;
   so_luong_giao: number;
@@ -51,6 +71,23 @@ interface EditFormValues {
   hop_dong_id: string;
   noi_dung: string;
   line_items: LineItem[];
+}
+
+function donGiaChuaVat(ct: PhieuGiaoHangChiTiet): number {
+  return Number(ct.gia_hop_dong) || Number(ct.gia_ban_thuc_te) || 0;
+}
+
+function normalizePhieuGiaoHang(raw: Record<string, unknown>): PhieuGiaoHangFull {
+  const r = raw as PhieuGiaoHangFull & { ten_cong_ty?: string; so_hop_dong?: string; ten_du_an?: string };
+  return {
+    ...r,
+    khach_hang: r.khach_hang ?? (r.ten_cong_ty ? { ten_cong_ty: r.ten_cong_ty } as KhachHang : undefined),
+    hop_dong: r.hop_dong ?? (r.hop_dong_id && r.so_hop_dong
+      ? { id: r.hop_dong_id, so_hop_dong: r.so_hop_dong, ten_du_an: r.ten_du_an } as HopDong
+      : r.hop_dong_id
+        ? { id: r.hop_dong_id, so_hop_dong: '', ten_du_an: r.ten_du_an } as HopDong
+        : undefined),
+  };
 }
 
 function makeEmptyLineItem(): LineItem {
@@ -70,7 +107,7 @@ export default function PhieuGiaoHangDetail() {
 
   const [phieuGiao, setPhieuGiao] = useState<PhieuGiaoHangFull | null>(null);
   const [chiTiet, setChiTiet] = useState<PhieuGiaoHangChiTiet[]>([]);
-  const [dongTienList, setDongTienList] = useState<DongTien[]>([]);
+  const [dongTienList, setDongTienList] = useState<DongTienMoi[]>([]);
   const [fileList, setFileList] = useState<TepDinhKem[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -119,12 +156,13 @@ export default function PhieuGiaoHangDetail() {
         return;
       }
 
-      setPhieuGiao(pghData as PhieuGiaoHangFull);
-      setChiTiet((pghData as any).chi_tiet || []);
+      const pgh = normalizePhieuGiaoHang(pghData as Record<string, unknown>);
+      setPhieuGiao(pgh);
+      setChiTiet(pgh.chi_tiet || (pghData as { chi_tiet?: PhieuGiaoHangChiTiet[] }).chi_tiet || []);
 
-      if (pghData.khach_hang_id) {
-        const dtRes = await dongTienApi.byEntity({ khach_hang_id: String(pghData.khach_hang_id) });
-        setDongTienList((dtRes.data as DongTien[]) || []);
+      if (pgh.hop_dong_id) {
+        const dtRes = await dongTienMoiApi.list({ hop_dong_id: String(pgh.hop_dong_id), limit: 9999 });
+        setDongTienList((dtRes.data as DongTienMoi[]) || []);
       } else {
         setDongTienList([]);
       }
@@ -145,9 +183,11 @@ export default function PhieuGiaoHangDetail() {
       ? chiTiet.map((ct) => ({
           key: crypto.randomUUID(),
           id: ct.id,
-          hop_dong_chi_tiet_id: (ct as any).hop_dong_chi_tiet_id || undefined,
-          ten_san_pham: ct.ten_san_pham,
+          hop_dong_chi_tiet_id: ct.hop_dong_chi_tiet_id || undefined,
+          ten_san_pham: ct.ten_san_pham || '',
           don_vi: ct.don_vi,
+          gia_hop_dong: ct.gia_hop_dong,
+          so_luong_hop_dong: ct.so_luong_hop_dong,
           so_luong_giao: ct.so_luong_giao,
           ghi_chu: ct.ghi_chu || '',
         }))
@@ -188,12 +228,15 @@ export default function PhieuGiaoHangDetail() {
           ...prev,
           line_items: prev.line_items.map((item) => {
             if (!item.hop_dong_chi_tiet_id) return item;
-            const hdCt = chiTietHD.find((c) => c.id === item.hop_dong_chi_tiet_id);
+            const hdCt = chiTietHD.find((c) => c.id === item.hop_dong_chi_tiet_id)
+              || chiTietHD[prev.line_items.indexOf(item)];
             if (!hdCt) return item;
             return {
               ...item,
+              ten_san_pham: item.ten_san_pham || hdCt.ten_san_pham,
+              gia_hop_dong: item.gia_hop_dong ?? hdCt.gia_hop_dong,
               so_luong_hop_dong: hdCt.so_luong,
-              da_giao_khac: daGiaoKhacMap[item.hop_dong_chi_tiet_id] || 0,
+              da_giao_khac: daGiaoKhacMap[item.hop_dong_chi_tiet_id!] || daGiaoKhacMap[hdCt.id] || 0,
             };
           }),
         }));
@@ -212,10 +255,6 @@ export default function PhieuGiaoHangDetail() {
     });
   }
 
-  function addLineItem() {
-    setEditForm((prev) => ({ ...prev, line_items: [...prev.line_items, makeEmptyLineItem()] }));
-  }
-
   function removeLineItem(index: number) {
     setEditForm((prev) => ({ ...prev, line_items: prev.line_items.filter((_, i) => i !== index) }));
   }
@@ -224,9 +263,15 @@ export default function PhieuGiaoHangDetail() {
     if (!phieuGiao) return;
     if (!editForm.khach_hang_id) { addToast('warning', 'Vui lòng chọn khách hàng'); return; }
     if (!editForm.ngay_giao) { addToast('warning', 'Vui lòng chọn ngày giao'); return; }
+    if (!editForm.hop_dong_id) { addToast('warning', 'Vui lòng chọn hợp đồng'); return; }
 
-    const validItems = editForm.line_items.filter((item) => item.ten_san_pham.trim() !== '');
-    if (validItems.length === 0) { addToast('warning', 'Vui lòng thêm ít nhất một sản phẩm'); return; }
+    const validItems = editForm.line_items.filter(
+      (item) => item.hop_dong_chi_tiet_id && item.so_luong_giao > 0,
+    );
+    if (validItems.length === 0) {
+      addToast('warning', 'Vui lòng nhập số lượng giao cho ít nhất một dòng hợp đồng');
+      return;
+    }
 
     setSaving(true);
     try {
@@ -263,6 +308,42 @@ export default function PhieuGiaoHangDetail() {
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   }
 
+  const calcItems = useMemo(
+    () =>
+      chiTiet.map((ct) => ({
+        so_luong: Number(ct.so_luong_giao) || 0,
+        gia_ban_thuc_te: donGiaChuaVat(ct),
+        thue_suat: Number(ct.thue_suat) || 10,
+      })),
+    [chiTiet],
+  );
+
+  const tongTruocVAT = useMemo(() => calcTongTruocVAT(calcItems), [calcItems]);
+  const tongVAT = useMemo(() => calcTongVAT(calcItems), [calcItems]);
+  const tongSauThue = useMemo(() => calcTongThanhToan(tongTruocVAT, tongVAT, 0), [tongTruocVAT, tongVAT]);
+
+  const vat8 = useMemo(
+    () =>
+      chiTiet
+        .filter((r) => Number(r.thue_suat) === 8)
+        .reduce(
+          (s, r) => s + calcVAT(calcThanhTienBan(Number(r.so_luong_giao), donGiaChuaVat(r)), 8),
+          0,
+        ),
+    [chiTiet],
+  );
+
+  const vat10 = useMemo(
+    () =>
+      chiTiet
+        .filter((r) => Number(r.thue_suat) === 10)
+        .reduce(
+          (s, r) => s + calcVAT(calcThanhTienBan(Number(r.so_luong_giao), donGiaChuaVat(r)), 10),
+          0,
+        ),
+    [chiTiet],
+  );
+
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
@@ -274,7 +355,16 @@ export default function PhieuGiaoHangDetail() {
     );
   }
 
-  if (!phieuGiao) return null;
+  if (!phieuGiao) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4">
+        <p className="text-sm text-gray-500">Không tìm thấy phiếu giao hàng</p>
+        <button onClick={() => navigate('/phieu-giao-hang')} className="btn-secondary">
+          Quay lại danh sách
+        </button>
+      </div>
+    );
+  }
 
 
   return (
@@ -315,13 +405,24 @@ export default function PhieuGiaoHangDetail() {
                 </Link>
               ) : <p className="text-sm font-semibold text-gray-900">--</p>}
             </div>
-            <div><p className="text-xs font-medium text-gray-500">Giá trị ghi nợ</p><p className="text-sm font-semibold text-gray-900">{formatVND(phieuGiao.gia_tri_ghi_no)}</p></div>
+            <div>
+              <p className="text-xs font-medium text-gray-500">Giá trị ghi nợ (sau thuế)</p>
+              <p className="text-sm font-semibold text-gray-900">
+                {formatVND(chiTiet.length > 0 ? tongSauThue : phieuGiao.gia_tri_ghi_no)}
+              </p>
+            </div>
             <div><p className="text-xs font-medium text-gray-500">Nội dung</p><p className="text-sm font-semibold text-gray-900">{phieuGiao.noi_dung || '--'}</p></div>
             <div><p className="text-xs font-medium text-gray-500">Người tạo</p><p className="text-sm font-semibold text-gray-900">{phieuGiao.nguoi_tao || '--'}</p></div>
             <div><p className="text-xs font-medium text-gray-500">Tạo lúc</p><p className="text-sm font-semibold text-gray-900">{formatDate(phieuGiao.tao_luc) || '--'}</p></div>
           </div>
         </div>
       </div>
+
+      {!phieuGiao.hop_dong_id && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          Phiếu giao hàng chưa liên kết hợp đồng. Vui lòng chỉnh sửa và chọn hợp đồng để hiển thị giá và thuế VAT.
+        </div>
+      )}
 
       {/* Chi tiet san pham */}
       <div className="card">
@@ -336,27 +437,71 @@ export default function PhieuGiaoHangDetail() {
               <table className="w-full">
                 <thead>
                   <tr>
-                    <th className="table-header">Tên sản phẩm</th>
-                    <th className="table-header">Đơn vị</th>
-                    <th className="table-header text-right">Số lượng giao</th>
+                    <th className="table-header w-64 max-w-xs">Tên sản phẩm</th>
+                    <th className="table-header w-16">Đơn vị</th>
+                    <th className="table-header w-20 text-right">SL giao</th>
+                    <th className="table-header w-32 text-right">Giá bán chưa VAT</th>
+                    <th className="table-header w-16 text-right">Thuế (%)</th>
+                    <th className="table-header w-32 text-right">Thành tiền chưa VAT</th>
+                    <th className="table-header w-28 text-right">VAT</th>
                     <th className="table-header">Ghi chú</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-200">
-                  {chiTiet.map((ct) => (
-                    <tr key={ct.id} className="hover:bg-gray-50 transition-colors">
-                      <td className="table-cell font-medium text-gray-900">{ct.ten_san_pham}</td>
-                      <td className="table-cell text-gray-500">{ct.don_vi}</td>
-                      <td className="table-cell text-right">{formatNumber(ct.so_luong_giao)}</td>
-                      <td className="table-cell text-gray-500">{ct.ghi_chu || '—'}</td>
-                    </tr>
-                  ))}
+                  {chiTiet.map((ct) => {
+                    const giaChuaVat = donGiaChuaVat(ct);
+                    const thanhTien = calcThanhTienBan(Number(ct.so_luong_giao), giaChuaVat);
+                    const vat = calcVAT(thanhTien, Number(ct.thue_suat) || 10);
+                    return (
+                      <tr key={ct.id} className="hover:bg-gray-50 transition-colors">
+                        <td className="table-cell font-medium text-gray-900 break-words whitespace-normal">
+                          {ct.ten_san_pham || '—'}
+                        </td>
+                        <td className="table-cell text-gray-500">{ct.don_vi}</td>
+                        <td className="table-cell text-right">{formatNumber(ct.so_luong_giao)}</td>
+                        <td className="table-cell text-right whitespace-nowrap text-gray-700">
+                          {giaChuaVat > 0 ? formatVND(giaChuaVat) : '—'}
+                        </td>
+                        <td className="table-cell text-right">{formatPercent(ct.thue_suat)}</td>
+                        <td className="table-cell text-right font-semibold text-gray-900 whitespace-nowrap">
+                          {thanhTien > 0 ? formatVND(thanhTien) : '—'}
+                        </td>
+                        <td className="table-cell text-right text-gray-500 whitespace-nowrap">
+                          {vat > 0 ? formatVND(vat) : '—'}
+                        </td>
+                        <td className="table-cell text-gray-500">{ct.ghi_chu || '—'}</td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
           )}
         </div>
       </div>
+
+      {chiTiet.length > 0 && (
+        <div className="rounded-xl border border-gray-200 bg-white overflow-hidden max-w-lg ml-auto">
+          <div className="divide-y divide-gray-100">
+            <div className="flex items-center justify-between px-5 py-3 text-sm">
+              <span className="text-gray-500">Tiền hàng (chưa VAT)</span>
+              <span className="font-semibold text-gray-900">{formatVND(tongTruocVAT)}</span>
+            </div>
+            <div className="flex items-center justify-between px-5 py-3 text-sm">
+              <span className="text-red-500">Thuế VAT 8%</span>
+              <span className="font-semibold text-red-500">{formatVND(vat8)}</span>
+            </div>
+            <div className="flex items-center justify-between px-5 py-3 text-sm">
+              <span className="text-red-500">Thuế VAT 10%</span>
+              <span className="font-semibold text-red-500">{formatVND(vat10)}</span>
+            </div>
+            <div className="flex items-center justify-between px-5 py-4 bg-blue-50">
+              <span className="text-sm font-bold text-gray-900 uppercase tracking-wide">Tổng giá trị sau thuế</span>
+              <span className="text-xl font-bold text-blue-600">{formatVND(tongSauThue)}</span>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Dong tien */}
       <div className="card">
@@ -366,28 +511,40 @@ export default function PhieuGiaoHangDetail() {
           </h2>
         </div>
         <div className="card-body p-0">
-          {dongTienList.length === 0 ? (
-            <p className="px-6 py-4 text-sm text-gray-500">Chưa có dòng tiền nào liên quan</p>
+          {!phieuGiao.hop_dong_id ? (
+            <p className="px-6 py-4 text-sm text-gray-500">Chưa liên kết hợp đồng — không hiển thị dòng tiền</p>
+          ) : dongTienList.length === 0 ? (
+            <p className="px-6 py-4 text-sm text-gray-500">Chưa có dòng tiền nào gắn hợp đồng này</p>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead>
                   <tr>
-                    <th className="table-header">Ngày thực hiện</th>
+                    <th className="table-header">Ngày GD</th>
                     <th className="table-header">Mô tả giao dịch</th>
-                    <th className="table-header text-right">Ghi nợ</th>
-                    <th className="table-header text-right">Ghi có</th>
+                    <th className="table-header">Hạng mục</th>
+                    <th className="table-header text-right">Thu</th>
+                    <th className="table-header text-right">Chi</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-200">
-                  {dongTienList.map((dt) => (
-                    <tr key={dt.id} className="hover:bg-gray-50 transition-colors">
-                      <td className="table-cell text-gray-500">{formatDate(dt.ngay_gio_giao_dich)}</td>
-                      <td className="table-cell text-gray-700">{dt.mo_ta_giao_dich || '--'}</td>
-                      <td className="table-cell text-right font-semibold text-gray-900">{formatVND(dt.ghi_no)}</td>
-                      <td className="table-cell text-right font-semibold text-gray-900">{formatVND(dt.ghi_co)}</td>
-                    </tr>
-                  ))}
+                  {dongTienList.map((dt) => {
+                    const thu = isDongTienThu(dt) ? Number(dt.so_tien) || 0 : 0;
+                    const chi = isDongTienChi(dt) ? Number(dt.so_tien) || 0 : 0;
+                    return (
+                      <tr key={dt.id} className="hover:bg-gray-50 transition-colors">
+                        <td className="table-cell text-gray-500 whitespace-nowrap">{formatDateTime(dt.ngay_giao_dich)}</td>
+                        <td className="table-cell text-gray-700">{dt.mo_ta_giao_dich || '--'}</td>
+                        <td className="table-cell text-gray-500">{dt.ten_hang_muc || '--'}</td>
+                        <td className="table-cell text-right font-semibold text-green-600">
+                          {thu > 0 ? formatVND(thu) : <span className="text-gray-300">—</span>}
+                        </td>
+                        <td className="table-cell text-right font-semibold text-red-600">
+                          {chi > 0 ? formatVND(chi) : <span className="text-gray-300">—</span>}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -465,7 +622,9 @@ export default function PhieuGiaoHangDetail() {
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Hợp đồng</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Hợp đồng <span className="text-red-500">*</span>
+              </label>
               <select value={editForm.hop_dong_id}
                 onChange={(e) => setEditForm((f) => ({ ...f, hop_dong_id: e.target.value }))}
                 className="select-field w-full" disabled={!editForm.khach_hang_id}>
@@ -485,13 +644,7 @@ export default function PhieuGiaoHangDetail() {
 
           {/* Line items */}
           <div>
-            <div className="flex items-center justify-between mb-2">
-              <label className="block text-sm font-medium text-gray-700">Chi tiết sản phẩm</label>
-              <button type="button" onClick={addLineItem}
-                className="text-sm text-primary-600 hover:text-primary-700 font-medium flex items-center gap-1">
-                <Plus className="w-3.5 h-3.5" /> Thêm dòng
-              </button>
-            </div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Chi tiết sản phẩm (từ hợp đồng)</label>
 
             {loadingHD && (
               <p className="text-xs text-gray-400 animate-pulse mb-2">Đang tải thông tin hợp đồng...</p>
@@ -503,6 +656,7 @@ export default function PhieuGiaoHangDetail() {
                   <tr className="bg-gray-50 border-b border-gray-100">
                     <th className="px-3 py-2 text-left text-xs font-semibold text-gray-500">Tên sản phẩm</th>
                     <th className="px-2 py-2 text-center text-xs font-semibold text-gray-500 w-16">ĐV</th>
+                    <th className="px-2 py-2 text-right text-xs font-semibold text-gray-500 w-24">Đơn giá</th>
                     <th className="px-2 py-2 text-right text-xs font-semibold text-orange-500 w-20">Đã giao khác</th>
                     <th className="px-2 py-2 text-right text-xs font-semibold text-green-600 w-20">Còn lại</th>
                     <th className="px-2 py-2 text-right text-xs font-semibold text-blue-600 w-24">SL giao</th>
@@ -535,6 +689,9 @@ export default function PhieuGiaoHangDetail() {
                               className="w-full px-1 py-1 text-sm text-center border border-gray-200 rounded focus:border-blue-400 focus:outline-none"
                               placeholder="ĐV" />
                           )}
+                        </td>
+                        <td className="px-2 py-1.5 text-right text-sm text-gray-600 whitespace-nowrap">
+                          {item.gia_hop_dong ? formatVND(item.gia_hop_dong) : '—'}
                         </td>
                         <td className="px-2 py-1.5 text-right text-sm">
                           {hasHD ? (
