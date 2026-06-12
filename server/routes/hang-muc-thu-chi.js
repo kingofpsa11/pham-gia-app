@@ -14,6 +14,13 @@ function insertId(result) {
   return Number(result?.insertId ?? result?.[0]?.insertId);
 }
 
+function coerceBooleanField(body, current, field) {
+  if (Object.prototype.hasOwnProperty.call(body, field)) {
+    return body[field] ? 1 : 0;
+  }
+  return current[field] ? 1 : 0;
+}
+
 router.get('/hang-muc-thu-chi', async (req, res) => {
   try {
     const loai = String(req.query.loai_giao_dich || '');
@@ -110,9 +117,9 @@ router.put('/hang-muc-thu-chi/:id', async (req, res) => {
         parentId,
         capDo,
         body.tinh_chat || current.tinh_chat || 'khac',
-        body.ap_dung_cho_hop_dong ? 1 : 0,
-        body.ap_dung_cho_nha_cung_cap ? 1 : 0,
-        body.ap_dung_cho_nhan_vien ? 1 : 0,
+        coerceBooleanField(body, current, 'ap_dung_cho_hop_dong'),
+        coerceBooleanField(body, current, 'ap_dung_cho_nha_cung_cap'),
+        coerceBooleanField(body, current, 'ap_dung_cho_nhan_vien'),
         body.thu_tu != null ? Number(body.thu_tu) : current.thu_tu,
         body.trang_thai || 'hoat_dong',
         id,
