@@ -21,9 +21,12 @@ import dongTienMoiRouter from './routes/dong-tien-moi.js';
 import googleDriveRouter from './routes/google-drive.js';
 import cauHinhRouter from './routes/cau-hinh.js';
 import usersRouter from './routes/users.js';
+import { requireAuth } from './middleware/auth.js';
 import { ensureSchema } from './utils/ensureSchema.js';
+import { assertJwtSecretConfigured } from './utils/jwtSecret.js';
 
 dotenv.config();
+assertJwtSecretConfigured();
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const distPath = path.join(__dirname, '../dist');
@@ -57,7 +60,7 @@ app.get('/api/health', async (_req, res) => {
   }
 });
 
-app.get('/api/tables', async (_req, res) => {
+app.get('/api/tables', requireAuth, async (_req, res) => {
   try {
     const rows = await query(
       `SELECT TABLE_NAME AS table_name
@@ -74,6 +77,8 @@ app.get('/api/tables', async (_req, res) => {
 });
 
 app.use('/api/auth', authRouter);
+app.use('/api', googleDriveRouter);
+app.use('/api', requireAuth);
 app.use('/api', dashboardRouter);
 app.use('/api', khachHangRouter);
 app.use('/api', baoGiaRouter);
@@ -87,7 +92,6 @@ app.use('/api', hangMucThuChiRouter);
 app.use('/api', nhaCungCapRouter);
 app.use('/api', hopDongMuaRouter);
 app.use('/api', dongTienMoiRouter);
-app.use('/api', googleDriveRouter);
 app.use('/api', cauHinhRouter);
 app.use('/api', usersRouter);
 

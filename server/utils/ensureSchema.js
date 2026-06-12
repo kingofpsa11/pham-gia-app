@@ -1,5 +1,7 @@
 import { query, queryOne } from '../db.js';
 
+const RUN_DATA_REPAIR_PATCHES = process.env.RUN_DATA_REPAIR_PATCHES === '1';
+
 function normalizeName(s) {
   return String(s || '').toLowerCase().replace(/\s+/g, ' ').trim();
 }
@@ -225,8 +227,12 @@ export async function ensureSchema() {
     `SELECT patch_key FROM app_schema_patches WHERE patch_key = 'pgh_hdct_link_v1'`
   );
   if (!pghHdctPatch) {
-    await repairPhieuGiaoHangHdctLinks();
-    await query(`INSERT INTO app_schema_patches (patch_key) VALUES ('pgh_hdct_link_v1')`);
+    if (RUN_DATA_REPAIR_PATCHES) {
+      await repairPhieuGiaoHangHdctLinks();
+      await query(`INSERT INTO app_schema_patches (patch_key) VALUES ('pgh_hdct_link_v1')`);
+    } else {
+      console.warn('Schema: skipped pgh_hdct_link_v1 data repair; set RUN_DATA_REPAIR_PATCHES=1 to run it explicitly');
+    }
   }
 
   const cauHinhPatch = await queryOne(
@@ -292,16 +298,20 @@ export async function ensureSchema() {
     `SELECT patch_key FROM app_schema_patches WHERE patch_key = 'dong_tien_ngay_vn_wallclock_v1'`
   );
   if (!tzPatch) {
-    const countRow = await queryOne('SELECT COUNT(*) AS n FROM dong_tien_moi');
-    const n = Number(countRow?.n || 0);
-    if (n > 0) {
+    if (RUN_DATA_REPAIR_PATCHES) {
+      const countRow = await queryOne('SELECT COUNT(*) AS n FROM dong_tien_moi');
+      const n = Number(countRow?.n || 0);
+      if (n > 0) {
+        await query(
+          `UPDATE dong_tien_moi SET ngay_giao_dich = DATE_ADD(ngay_giao_dich, INTERVAL 7 HOUR)`
+        );
+        console.log(`Schema: fixed ${n} dong_tien_moi ngay_giao_dich (+7h, bỏ lưu UTC)`);
+      }
       await query(
-        `UPDATE dong_tien_moi SET ngay_giao_dich = DATE_ADD(ngay_giao_dich, INTERVAL 7 HOUR)`
+        `INSERT INTO app_schema_patches (patch_key) VALUES ('dong_tien_ngay_vn_wallclock_v1')`
       );
-      console.log(`Schema: fixed ${n} dong_tien_moi ngay_giao_dich (+7h, bỏ lưu UTC)`);
+    } else {
+      console.warn('Schema: skipped dong_tien_ngay_vn_wallclock_v1 data repair; set RUN_DATA_REPAIR_PATCHES=1 to run it explicitly');
     }
-    await query(
-      `INSERT INTO app_schema_patches (patch_key) VALUES ('dong_tien_ngay_vn_wallclock_v1')`
-    );
   }
 }
