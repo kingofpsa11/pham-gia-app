@@ -2,36 +2,9 @@ import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { query } from '../db.js';
+import { findUserTable, getUserColumns, pickColumn } from '../utils/userTable.js';
 
 const router = Router();
-
-const USER_TABLE_CANDIDATES = ['Admin', 'users', 'nguoi_dung', 'tai_khoan_he_thong'];
-
-async function findUserTable() {
-  const rows = await query(
-    `SELECT TABLE_NAME AS name
-     FROM information_schema.tables
-     WHERE table_schema = DATABASE()
-       AND TABLE_NAME IN (?, ?, ?)`,
-    USER_TABLE_CANDIDATES
-  );
-  const found = new Set(rows.map((r) => r.name));
-  return USER_TABLE_CANDIDATES.find((name) => found.has(name)) ?? null;
-}
-
-async function getUserColumns(tableName) {
-  const rows = await query(
-    `SELECT COLUMN_NAME AS name
-     FROM information_schema.columns
-     WHERE table_schema = DATABASE() AND table_name = ?`,
-    [tableName]
-  );
-  return new Set(rows.map((r) => r.name));
-}
-
-function pickColumn(columns, candidates) {
-  return candidates.find((name) => columns.has(name)) ?? null;
-}
 
 router.post('/login', async (req, res) => {
   try {
