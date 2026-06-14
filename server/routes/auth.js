@@ -2,17 +2,19 @@ import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { query } from '../db.js';
+import { getJwtSecret } from '../middleware/auth.js';
 
 const router = Router();
 
 const USER_TABLE_CANDIDATES = ['Admin', 'users', 'nguoi_dung', 'tai_khoan_he_thong'];
 
 async function findUserTable() {
+  const placeholders = USER_TABLE_CANDIDATES.map(() => '?').join(', ');
   const rows = await query(
     `SELECT TABLE_NAME AS name
      FROM information_schema.tables
      WHERE table_schema = DATABASE()
-       AND TABLE_NAME IN (?, ?, ?)`,
+       AND TABLE_NAME IN (${placeholders})`,
     USER_TABLE_CANDIDATES
   );
   const found = new Set(rows.map((r) => r.name));
@@ -92,7 +94,7 @@ router.post('/login', async (req, res) => {
 
     const token = jwt.sign(
       { id: userId, email, role },
-      process.env.JWT_SECRET || 'phamgia_jwt_secret_change_this_2026',
+      getJwtSecret(),
       { expiresIn: '7d' }
     );
 
