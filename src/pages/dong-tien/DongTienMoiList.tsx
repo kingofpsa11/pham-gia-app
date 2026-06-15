@@ -658,6 +658,7 @@ export default function DongTienMoiList() {
   // ── Modal ──────────────────────────────────────────────────────────────────
   const [modalOpen, setModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
+  const [editingRow, setEditingRow] = useState<DongTienMoi | null>(null);
   const [form, setForm] = useState<FormValues>(emptyForm);
   const [saving, setSaving] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<DongTienMoi | null>(null);
@@ -821,12 +822,14 @@ export default function DongTienMoiList() {
   // ── Modal open ─────────────────────────────────────────────────────────────
   function openAddModal() {
     setEditingId(null);
+    setEditingRow(null);
     setForm(emptyForm);
     setModalOpen(true);
   }
 
   function openEditModal(row: DongTienMoi) {
     setEditingId(row.id);
+    setEditingRow(row);
     const hmId = row.hang_muc_thu_chi_id ? String(row.hang_muc_thu_chi_id) : '';
     const loaiGd = isHangMucChuyenKhoanNoiBo(hmId, hangMucList)
       ? 'chuyen_khoan_noi_bo'
@@ -868,7 +871,9 @@ export default function DongTienMoiList() {
     try {
       const payload = {
         loai_giao_dich: loaiGd,
-        chieu_tien: loaiGd === 'chuyen_khoan_noi_bo' ? 'chi' : null,
+        chieu_tien: loaiGd === 'chuyen_khoan_noi_bo'
+          ? (editingRow?.loai_giao_dich === 'chuyen_khoan_noi_bo' ? editingRow.chieu_tien || 'chi' : 'chi')
+          : null,
         ngay_giao_dich: form.ngay_giao_dich,
         tai_khoan_tien_id: Number(form.tai_khoan_tien_id),
         tai_khoan_nhan_id: form.tai_khoan_nhan_id ? Number(form.tai_khoan_nhan_id) : null,

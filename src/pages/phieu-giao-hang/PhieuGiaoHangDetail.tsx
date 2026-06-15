@@ -16,6 +16,7 @@ import {
   calcTongThanhToan,
 } from '../../lib/utils';
 import Modal from '../../components/ui/Modal';
+import NumInput from '../../components/ui/NumInput';
 import {
   ArrowLeft,
   Pencil,
@@ -276,11 +277,13 @@ export default function PhieuGiaoHangDetail() {
     setSaving(true);
     try {
       await phieuGiaoHangApi.update(phieuGiao.id, {
+        so_phieu: phieuGiao.so_phieu,
         ngay_giao: editForm.ngay_giao,
         khach_hang_id: Number(editForm.khach_hang_id),
         hop_dong_id: editForm.hop_dong_id ? Number(editForm.hop_dong_id) : null,
         gia_tri_ghi_no: 0,
         noi_dung: editForm.noi_dung.trim() || null,
+        nguoi_tao: phieuGiao.nguoi_tao || '',
         chi_tiet: validItems.map((item) => ({
           hop_dong_chi_tiet_id: item.hop_dong_chi_tiet_id || null,
           ten_san_pham: item.ten_san_pham.trim(),
