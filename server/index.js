@@ -22,8 +22,12 @@ import googleDriveRouter from './routes/google-drive.js';
 import cauHinhRouter from './routes/cau-hinh.js';
 import usersRouter from './routes/users.js';
 import { ensureSchema } from './utils/ensureSchema.js';
+import { requireAdmin } from './middleware/auth.js';
+import { requireApiAuth } from './middleware/apiAuth.js';
+import { assertJwtSecretConfigured } from './utils/jwtSecret.js';
 
 dotenv.config();
+assertJwtSecretConfigured();
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const distPath = path.join(__dirname, '../dist');
@@ -57,7 +61,7 @@ app.get('/api/health', async (_req, res) => {
   }
 });
 
-app.get('/api/tables', async (_req, res) => {
+app.get('/api/tables', requireAdmin, async (_req, res) => {
   try {
     const rows = await query(
       `SELECT TABLE_NAME AS table_name
@@ -73,6 +77,7 @@ app.get('/api/tables', async (_req, res) => {
   }
 });
 
+app.use('/api', requireApiAuth);
 app.use('/api/auth', authRouter);
 app.use('/api', dashboardRouter);
 app.use('/api', khachHangRouter);

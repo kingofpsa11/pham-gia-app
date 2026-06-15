@@ -16,6 +16,7 @@ import {
   calcTongThanhToan,
 } from '../../lib/utils';
 import Modal from '../../components/ui/Modal';
+import NumInput from '../../components/ui/NumInput';
 import {
   ArrowLeft,
   Pencil,
@@ -78,7 +79,7 @@ function donGiaChuaVat(ct: PhieuGiaoHangChiTiet): number {
 }
 
 function normalizePhieuGiaoHang(raw: Record<string, unknown>): PhieuGiaoHangFull {
-  const r = raw as PhieuGiaoHangFull & { ten_cong_ty?: string; so_hop_dong?: string; ten_du_an?: string };
+  const r = raw as unknown as PhieuGiaoHangFull & { ten_cong_ty?: string; so_hop_dong?: string; ten_du_an?: string };
   return {
     ...r,
     khach_hang: r.khach_hang ?? (r.ten_cong_ty ? { ten_cong_ty: r.ten_cong_ty } as KhachHang : undefined),
@@ -228,15 +229,17 @@ export default function PhieuGiaoHangDetail() {
           ...prev,
           line_items: prev.line_items.map((item) => {
             if (!item.hop_dong_chi_tiet_id) return item;
+            const refId = item.hop_dong_chi_tiet_id;
             const hdCt = chiTietHD.find((c) => c.id === item.hop_dong_chi_tiet_id)
               || chiTietHD[prev.line_items.indexOf(item)];
             if (!hdCt) return item;
+            const hdCtId = hdCt.id ?? refId;
             return {
               ...item,
               ten_san_pham: item.ten_san_pham || hdCt.ten_san_pham,
               gia_hop_dong: item.gia_hop_dong ?? hdCt.gia_hop_dong,
               so_luong_hop_dong: hdCt.so_luong,
-              da_giao_khac: daGiaoKhacMap[item.hop_dong_chi_tiet_id!] || daGiaoKhacMap[hdCt.id] || 0,
+              da_giao_khac: daGiaoKhacMap[refId] || daGiaoKhacMap[hdCtId] || 0,
             };
           }),
         }));
@@ -276,11 +279,13 @@ export default function PhieuGiaoHangDetail() {
     setSaving(true);
     try {
       await phieuGiaoHangApi.update(phieuGiao.id, {
+        so_phieu: phieuGiao.so_phieu,
         ngay_giao: editForm.ngay_giao,
         khach_hang_id: Number(editForm.khach_hang_id),
         hop_dong_id: editForm.hop_dong_id ? Number(editForm.hop_dong_id) : null,
         gia_tri_ghi_no: 0,
         noi_dung: editForm.noi_dung.trim() || null,
+        nguoi_tao: phieuGiao.nguoi_tao || '',
         chi_tiet: validItems.map((item) => ({
           hop_dong_chi_tiet_id: item.hop_dong_chi_tiet_id || null,
           ten_san_pham: item.ten_san_pham.trim(),
