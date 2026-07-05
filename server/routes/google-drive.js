@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import jwt from 'jsonwebtoken';
-import { requireAuth } from '../middleware/auth.js';
+import { getJwtSecret, requireAuth } from '../middleware/auth.js';
 import {
   isGoogleDriveConfigured,
   buildGoogleAuthUrl,
@@ -11,19 +11,18 @@ import {
 } from '../utils/googleDrive.js';
 
 const router = Router();
-const JWT_SECRET = process.env.JWT_SECRET || 'phamgia_jwt_secret_change_this_2026';
 
 function buildState(userId, redirect, appOrigin) {
   return jwt.sign(
     { userId, redirect: redirect || '/cai-dat', origin: appOrigin || '' },
-    JWT_SECRET,
+    getJwtSecret(),
     { expiresIn: '15m' },
   );
 }
 
 function parseState(state) {
   try {
-    return jwt.verify(state, JWT_SECRET);
+    return jwt.verify(state, getJwtSecret());
   } catch {
     return null;
   }

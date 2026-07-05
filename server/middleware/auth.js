@@ -1,11 +1,24 @@
 import jwt from 'jsonwebtoken';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'phamgia_jwt_secret_change_this_2026';
+export const DEFAULT_JWT_SECRET = 'phamgia_jwt_secret_change_this_2026';
+
+export function getJwtSecret() {
+  const secret = process.env.JWT_SECRET;
+  if (secret) return secret;
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('JWT_SECRET must be set in production');
+  }
+  return DEFAULT_JWT_SECRET;
+}
+
+export function assertJwtSecretConfigured() {
+  getJwtSecret();
+}
 
 export function verifyToken(token) {
   if (!token) return null;
   try {
-    return jwt.verify(token, JWT_SECRET);
+    return jwt.verify(token, getJwtSecret());
   } catch {
     return null;
   }
