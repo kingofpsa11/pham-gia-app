@@ -10,6 +10,12 @@ function insertId(result) {
   return Number(result?.insertId ?? result?.[0]?.insertId);
 }
 
+export function resolveCashflowChieuTien(body, existing) {
+  return Object.prototype.hasOwnProperty.call(body, 'chieu_tien')
+    ? body.chieu_tien || null
+    : existing.chieu_tien ?? null;
+}
+
 const LIST_SELECT = `
   SELECT dt.*,
     tkt.ten_tai_khoan, tkt.loai_tai_khoan, tkt.ngan_hang,
@@ -292,6 +298,8 @@ router.put('/dong-tien-moi/:id', async (req, res) => {
   try {
     const id = req.params.id;
     const body = req.body || {};
+    const existing = await queryOne('SELECT chieu_tien FROM dong_tien_moi WHERE id = ?', [id]);
+    if (!existing) return res.status(404).json({ error: 'Not found' });
     const ngayGD = parseNgayGiaoDich(body.ngay_giao_dich);
     const ngayHT = parseNgayHachToan(body.ngay_giao_dich);
     await query(
@@ -300,7 +308,7 @@ router.put('/dong-tien-moi/:id', async (req, res) => {
         ngayGD,
         ngayHT,
         body.loai_giao_dich,
-        body.chieu_tien || null,
+        resolveCashflowChieuTien(body, existing),
         body.tai_khoan_tien_id,
         body.tai_khoan_nhan_id || null,
         Number(body.so_tien) || 0,
