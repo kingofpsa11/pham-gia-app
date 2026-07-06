@@ -43,6 +43,19 @@ function shapePhieuGiaoHang(row, chiTiet) {
   return shaped;
 }
 
+export function resolvePhieuGiaoHangUpdateValues(body, existing, khachHangId, giaTriGhiNo, id) {
+  return [
+    body.so_phieu ?? existing.so_phieu,
+    body.ngay_giao,
+    khachHangId,
+    body.hop_dong_id || null,
+    giaTriGhiNo,
+    body.noi_dung || '',
+    body.nguoi_tao ?? existing.nguoi_tao ?? '',
+    id,
+  ];
+}
+
 async function loadPhieuGiaoHangJoined(id) {
   return queryOne(`${PGH_JOIN_SELECT} WHERE pgh.id = ?`, [id]);
 }
@@ -209,6 +222,11 @@ router.put('/phieu-giao-hang/:id', async (req, res) => {
   try {
     const id = req.params.id;
     const body = req.body || {};
+    const existing = await queryOne(
+      'SELECT so_phieu, nguoi_tao FROM phieu_giao_hang WHERE id = ?',
+      [id],
+    );
+    if (!existing) return res.status(404).json({ error: 'Not found' });
     if (!body.hop_dong_id) {
       return res.status(400).json({ error: 'Phiếu giao hàng phải liên kết với hợp đồng' });
     }
@@ -221,16 +239,7 @@ router.put('/phieu-giao-hang/:id', async (req, res) => {
       `UPDATE phieu_giao_hang
        SET so_phieu=?, ngay_giao=?, khach_hang_id=?, hop_dong_id=?, gia_tri_ghi_no=?, noi_dung=?, nguoi_tao=?
        WHERE id=?`,
-      [
-        body.so_phieu,
-        body.ngay_giao,
-        khachHangId,
-        body.hop_dong_id || null,
-        giaTriGhiNo,
-        body.noi_dung || '',
-        body.nguoi_tao || '',
-        id,
-      ]
+      resolvePhieuGiaoHangUpdateValues(body, existing, khachHangId, giaTriGhiNo, id)
     );
 
     if (body.chi_tiet) {
