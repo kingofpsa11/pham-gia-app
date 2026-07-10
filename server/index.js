@@ -21,6 +21,7 @@ import dongTienMoiRouter from './routes/dong-tien-moi.js';
 import googleDriveRouter from './routes/google-drive.js';
 import cauHinhRouter from './routes/cau-hinh.js';
 import usersRouter from './routes/users.js';
+import { apiAuthGate } from './middleware/apiAuthGate.js';
 import { ensureSchema } from './utils/ensureSchema.js';
 
 dotenv.config();
@@ -57,6 +58,9 @@ app.get('/api/health', async (_req, res) => {
   }
 });
 
+app.use('/api', apiAuthGate);
+app.use('/api/auth', authRouter);
+
 app.get('/api/tables', async (_req, res) => {
   try {
     const rows = await query(
@@ -73,7 +77,6 @@ app.get('/api/tables', async (_req, res) => {
   }
 });
 
-app.use('/api/auth', authRouter);
 app.use('/api', dashboardRouter);
 app.use('/api', khachHangRouter);
 app.use('/api', baoGiaRouter);

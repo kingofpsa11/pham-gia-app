@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import jwt from 'jsonwebtoken';
-import { requireAuth } from '../middleware/auth.js';
+import { requireAuth, JWT_SECRET } from '../middleware/auth.js';
 import {
   isGoogleDriveConfigured,
   buildGoogleAuthUrl,
@@ -11,7 +11,6 @@ import {
 } from '../utils/googleDrive.js';
 
 const router = Router();
-const JWT_SECRET = process.env.JWT_SECRET || 'phamgia_jwt_secret_change_this_2026';
 
 function buildState(userId, redirect, appOrigin) {
   return jwt.sign(
