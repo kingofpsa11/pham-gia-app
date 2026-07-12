@@ -22,6 +22,8 @@ import googleDriveRouter from './routes/google-drive.js';
 import cauHinhRouter from './routes/cau-hinh.js';
 import usersRouter from './routes/users.js';
 import { ensureSchema } from './utils/ensureSchema.js';
+import { apiAuthGate } from './middleware/apiAuthGate.js';
+import { assertJwtSecretConfigured } from './middleware/auth.js';
 
 dotenv.config();
 
@@ -57,6 +59,9 @@ app.get('/api/health', async (_req, res) => {
   }
 });
 
+app.use('/api/auth', authRouter);
+app.use('/api', apiAuthGate);
+
 app.get('/api/tables', async (_req, res) => {
   try {
     const rows = await query(
@@ -73,7 +78,6 @@ app.get('/api/tables', async (_req, res) => {
   }
 });
 
-app.use('/api/auth', authRouter);
 app.use('/api', dashboardRouter);
 app.use('/api', khachHangRouter);
 app.use('/api', baoGiaRouter);
@@ -104,6 +108,8 @@ if (isProduction) {
 app.use((_req, res) => {
   res.status(404).json({ error: 'Not found' });
 });
+
+assertJwtSecretConfigured();
 
 app.listen(PORT, async () => {
   try {
