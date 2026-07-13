@@ -22,106 +22,132 @@ import googleDriveRouter from './routes/google-drive.js';
 import cauHinhRouter from './routes/cau-hinh.js';
 import usersRouter from './routes/users.js';
 import { ensureSchema } from './utils/ensureSchema.js';
+import { assertJwtSecretConfigured, requireAdmin, requireAuth } from './middleware/auth.js';
 
 dotenv.config();
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 const distPath = path.join(__dirname, '../dist');
 const isProduction = process.env.NODE_ENV === 'production';
 
-const app = express();
 const PORT = Number(process.env.PORT) || 3000;
 
-app.use(cors());
-app.use(express.json());
+function apiAuthGate(req, res, next) {
+  if (req.path === '/google-drive/callback') {
+    return next();
+  }
+  return requireAuth(req, res, next);
+}
 
-app.get('/api/health', async (_req, res) => {
-  try {
-    await pingDatabase();
-    return res.json({
-      status: 'ok',
-      service: 'pham-gia-api',
-      environment: process.env.NODE_ENV || 'development',
-      database: 'connected',
-      timestamp: new Date().toISOString(),
-    });
-  } catch (err) {
-    return res.status(503).json({
-      status: 'error',
-      service: 'pham-gia-api',
-      environment: process.env.NODE_ENV || 'development',
-      database: 'disconnected',
-      message: err.message,
-      timestamp: new Date().toISOString(),
+export function createApp() {
+  const app = express();
+
+  app.use(cors());
+  app.use(express.json());
+
+  app.get('/api/health', async (_req, res) => {
+    try {
+      await pingDatabase();
+      return res.json({
+        status: 'ok',
+        service: 'pham-gia-api',
+        environment: process.env.NODE_ENV || 'development',
+        database: 'connected',
+        timestamp: new Date().toISOString(),
+      });
+    } catch (err) {
+      return res.status(503).json({
+        status: 'error',
+        service: 'pham-gia-api',
+        environment: process.env.NODE_ENV || 'development',
+        database: 'disconnected',
+        message: err.message,
+        timestamp: new Date().toISOString(),
+      });
+    }
+  });
+
+  app.use('/api/auth', authRouter);
+  app.use('/api', apiAuthGate);
+
+  app.get('/api/tables', requireAdmin, async (_req, res) => {
+    try {
+      const rows = await query(
+        `SELECT TABLE_NAME AS table_name
+         FROM information_schema.tables
+         WHERE table_schema = DATABASE()
+         ORDER BY TABLE_NAME`
+      );
+      const tables = rows.map((row) => row.table_name);
+      return res.json({ tables, count: tables.length });
+    } catch (err) {
+      console.error('GET /api/tables error:', err.message);
+      return res.status(500).json({ error: 'Không thể lấy danh sách bảng', message: err.message });
+    }
+  });
+
+  app.use('/api', dashboardRouter);
+  app.use('/api', khachHangRouter);
+  app.use('/api', baoGiaRouter);
+  app.use('/api', tepDinhKemRouter);
+  app.use('/api', hopDongRouter);
+  app.use('/api', phieuGiaoHangRouter);
+  app.use('/api', xuatBaoGiaExcelRouter);
+  app.use('/api', relationQueriesRouter);
+  app.use('/api', taiKhoanTienRouter);
+  app.use('/api', hangMucThuChiRouter);
+  app.use('/api', nhaCungCapRouter);
+  app.use('/api', hopDongMuaRouter);
+  app.use('/api', dongTienMoiRouter);
+  app.use('/api', googleDriveRouter);
+  app.use('/api', cauHinhRouter);
+  app.use('/api', usersRouter);
+
+  if (isProduction) {
+    app.use(express.static(distPath));
+    app.get('*', (req, res, next) => {
+      if (req.path.startsWith('/api')) return next();
+      res.sendFile(path.join(distPath, 'index.html'), (err) => {
+        if (err) next(err);
+      });
     });
   }
-});
 
-app.get('/api/tables', async (_req, res) => {
-  try {
-    const rows = await query(
-      `SELECT TABLE_NAME AS table_name
-       FROM information_schema.tables
-       WHERE table_schema = DATABASE()
-       ORDER BY TABLE_NAME`
-    );
-    const tables = rows.map((row) => row.table_name);
-    return res.json({ tables, count: tables.length });
-  } catch (err) {
-    console.error('GET /api/tables error:', err.message);
-    return res.status(500).json({ error: 'Không thể lấy danh sách bảng', message: err.message });
-  }
-});
+  app.use((_req, res) => {
+    res.status(404).json({ error: 'Not found' });
+  });
 
-app.use('/api/auth', authRouter);
-app.use('/api', dashboardRouter);
-app.use('/api', khachHangRouter);
-app.use('/api', baoGiaRouter);
-app.use('/api', tepDinhKemRouter);
-app.use('/api', hopDongRouter);
-app.use('/api', phieuGiaoHangRouter);
-app.use('/api', xuatBaoGiaExcelRouter);
-app.use('/api', relationQueriesRouter);
-app.use('/api', taiKhoanTienRouter);
-app.use('/api', hangMucThuChiRouter);
-app.use('/api', nhaCungCapRouter);
-app.use('/api', hopDongMuaRouter);
-app.use('/api', dongTienMoiRouter);
-app.use('/api', googleDriveRouter);
-app.use('/api', cauHinhRouter);
-app.use('/api', usersRouter);
+  return app;
+}
 
-if (isProduction) {
-  app.use(express.static(distPath));
-  app.get('*', (req, res, next) => {
-    if (req.path.startsWith('/api')) return next();
-    res.sendFile(path.join(distPath, 'index.html'), (err) => {
-      if (err) next(err);
-    });
+export const app = createApp();
+
+export function startServer() {
+  assertJwtSecretConfigured();
+
+  return app.listen(PORT, async () => {
+    try {
+      await ensureSchema();
+    } catch (err) {
+      console.error('Schema ensure failed:', err.message);
+    }
+    console.log(`Phạm Gia API listening on http://localhost:${PORT}`);
+    console.log(`  Health:  http://localhost:${PORT}/api/health`);
+    console.log(`  Tables:  http://localhost:${PORT}/api/tables`);
+    console.log(`  Login:   POST http://localhost:${PORT}/api/auth/login`);
+    console.log(`  Stats:   http://localhost:${PORT}/api/dashboard-stats`);
+    console.log(`  Báo giá: http://localhost:${PORT}/api/bao-gia`);
+    console.log(`  Hợp đồng: http://localhost:${PORT}/api/hop-dong`);
+    console.log(`  PGH:     http://localhost:${PORT}/api/phieu-giao-hang`);
+    console.log(`  PGH/HĐ:  http://localhost:${PORT}/api/phieu-giao-hang-by?hop_dong_id=...`);
+    console.log(`  Dòng tiền: http://localhost:${PORT}/api/dong-tien-moi`);
+    console.log(`  Dòng tiền/HĐ: http://localhost:${PORT}/api/dong-tien-by?hop_dong_id=...`);
+    console.log(`  BG/KH:   http://localhost:${PORT}/api/bao-gia-by?khach_hang_id=...`);
+    console.log(`  HĐ/KH:   http://localhost:${PORT}/api/hop-dong-by?khach_hang_id=...`);
   });
 }
 
-app.use((_req, res) => {
-  res.status(404).json({ error: 'Not found' });
-});
-
-app.listen(PORT, async () => {
-  try {
-    await ensureSchema();
-  } catch (err) {
-    console.error('Schema ensure failed:', err.message);
-  }
-  console.log(`Phạm Gia API listening on http://localhost:${PORT}`);
-  console.log(`  Health:  http://localhost:${PORT}/api/health`);
-  console.log(`  Tables:  http://localhost:${PORT}/api/tables`);
-  console.log(`  Login:   POST http://localhost:${PORT}/api/auth/login`);
-  console.log(`  Stats:   http://localhost:${PORT}/api/dashboard-stats`);
-  console.log(`  Báo giá: http://localhost:${PORT}/api/bao-gia`);
-  console.log(`  Hợp đồng: http://localhost:${PORT}/api/hop-dong`);
-  console.log(`  PGH:     http://localhost:${PORT}/api/phieu-giao-hang`);
-  console.log(`  PGH/HĐ:  http://localhost:${PORT}/api/phieu-giao-hang-by?hop_dong_id=...`);
-  console.log(`  Dòng tiền: http://localhost:${PORT}/api/dong-tien-moi`);
-  console.log(`  Dòng tiền/HĐ: http://localhost:${PORT}/api/dong-tien-by?hop_dong_id=...`);
-  console.log(`  BG/KH:   http://localhost:${PORT}/api/bao-gia-by?khach_hang_id=...`);
-  console.log(`  HĐ/KH:   http://localhost:${PORT}/api/hop-dong-by?khach_hang_id=...`);
-});
+if (process.argv[1] && path.resolve(process.argv[1]) === __filename) {
+  startServer();
+}
