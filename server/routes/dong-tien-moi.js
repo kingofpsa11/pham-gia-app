@@ -10,6 +10,53 @@ function insertId(result) {
   return Number(result?.insertId ?? result?.[0]?.insertId);
 }
 
+function hasOwn(obj, key) {
+  return Object.prototype.hasOwnProperty.call(obj, key);
+}
+
+function pickUpdateValue(existing, body, key) {
+  return hasOwn(body, key) ? body[key] : existing[key];
+}
+
+function nullable(value) {
+  return value || null;
+}
+
+export function mergeDongTienUpdate(existing, body) {
+  const hasNgayGiaoDich = hasOwn(body, 'ngay_giao_dich');
+  const ngayGiaoDich = hasNgayGiaoDich
+    ? parseNgayGiaoDich(body.ngay_giao_dich)
+    : existing.ngay_giao_dich;
+  const ngayHachToan = hasNgayGiaoDich
+    ? parseNgayHachToan(body.ngay_giao_dich)
+    : existing.ngay_hach_toan;
+
+  return {
+    ngay_giao_dich: ngayGiaoDich,
+    ngay_hach_toan: ngayHachToan,
+    loai_giao_dich: pickUpdateValue(existing, body, 'loai_giao_dich'),
+    chieu_tien: nullable(pickUpdateValue(existing, body, 'chieu_tien')),
+    tai_khoan_tien_id: pickUpdateValue(existing, body, 'tai_khoan_tien_id'),
+    tai_khoan_nhan_id: nullable(pickUpdateValue(existing, body, 'tai_khoan_nhan_id')),
+    so_tien: Number(pickUpdateValue(existing, body, 'so_tien')) || 0,
+    doi_tuong_id: nullable(pickUpdateValue(existing, body, 'doi_tuong_id')),
+    khach_hang_id: nullable(pickUpdateValue(existing, body, 'khach_hang_id')),
+    nha_cung_cap_id: nullable(pickUpdateValue(existing, body, 'nha_cung_cap_id')),
+    hop_dong_id: nullable(pickUpdateValue(existing, body, 'hop_dong_id')),
+    hop_dong_mua_id: nullable(pickUpdateValue(existing, body, 'hop_dong_mua_id')),
+    hang_muc_thu_chi_id: nullable(pickUpdateValue(existing, body, 'hang_muc_thu_chi_id')),
+    mo_ta_giao_dich: nullable(pickUpdateValue(existing, body, 'mo_ta_giao_dich')),
+    so_tai_khoan_doi_ung: nullable(pickUpdateValue(existing, body, 'so_tai_khoan_doi_ung')),
+    ten_tai_khoan_doi_ung: nullable(pickUpdateValue(existing, body, 'ten_tai_khoan_doi_ung')),
+    so_du_sau_giao_dich: hasOwn(body, 'so_du_sau_giao_dich')
+      ? body.so_du_sau_giao_dich ?? null
+      : existing.so_du_sau_giao_dich,
+    ma_giao_dich_ngan_hang: nullable(pickUpdateValue(existing, body, 'ma_giao_dich_ngan_hang')),
+    ghi_chu: nullable(pickUpdateValue(existing, body, 'ghi_chu')),
+    trang_thai: pickUpdateValue(existing, body, 'trang_thai') || 'hoan_thanh',
+  };
+}
+
 const LIST_SELECT = `
   SELECT dt.*,
     tkt.ten_tai_khoan, tkt.loai_tai_khoan, tkt.ngan_hang,
@@ -292,31 +339,33 @@ router.put('/dong-tien-moi/:id', async (req, res) => {
   try {
     const id = req.params.id;
     const body = req.body || {};
-    const ngayGD = parseNgayGiaoDich(body.ngay_giao_dich);
-    const ngayHT = parseNgayHachToan(body.ngay_giao_dich);
+    const existing = await queryOne('SELECT * FROM dong_tien_moi WHERE id = ?', [id]);
+    if (!existing) return res.status(404).json({ error: 'Not found' });
+
+    const update = mergeDongTienUpdate(existing, body);
     await query(
       `UPDATE dong_tien_moi SET ngay_giao_dich=?, ngay_hach_toan=?, loai_giao_dich=?, chieu_tien=?, tai_khoan_tien_id=?, tai_khoan_nhan_id=?, so_tien=?, doi_tuong_id=?, khach_hang_id=?, nha_cung_cap_id=?, hop_dong_id=?, hop_dong_mua_id=?, hang_muc_thu_chi_id=?, mo_ta_giao_dich=?, so_tai_khoan_doi_ung=?, ten_tai_khoan_doi_ung=?, so_du_sau_giao_dich=?, ma_giao_dich_ngan_hang=?, ghi_chu=?, trang_thai=? WHERE id=?`,
       [
-        ngayGD,
-        ngayHT,
-        body.loai_giao_dich,
-        body.chieu_tien || null,
-        body.tai_khoan_tien_id,
-        body.tai_khoan_nhan_id || null,
-        Number(body.so_tien) || 0,
-        body.doi_tuong_id || null,
-        body.khach_hang_id || null,
-        body.nha_cung_cap_id || null,
-        body.hop_dong_id || null,
-        body.hop_dong_mua_id || null,
-        body.hang_muc_thu_chi_id || null,
-        body.mo_ta_giao_dich || null,
-        body.so_tai_khoan_doi_ung || null,
-        body.ten_tai_khoan_doi_ung || null,
-        body.so_du_sau_giao_dich ?? null,
-        body.ma_giao_dich_ngan_hang ?? null,
-        body.ghi_chu || null,
-        body.trang_thai || 'hoan_thanh',
+        update.ngay_giao_dich,
+        update.ngay_hach_toan,
+        update.loai_giao_dich,
+        update.chieu_tien,
+        update.tai_khoan_tien_id,
+        update.tai_khoan_nhan_id,
+        update.so_tien,
+        update.doi_tuong_id,
+        update.khach_hang_id,
+        update.nha_cung_cap_id,
+        update.hop_dong_id,
+        update.hop_dong_mua_id,
+        update.hang_muc_thu_chi_id,
+        update.mo_ta_giao_dich,
+        update.so_tai_khoan_doi_ung,
+        update.ten_tai_khoan_doi_ung,
+        update.so_du_sau_giao_dich,
+        update.ma_giao_dich_ngan_hang,
+        update.ghi_chu,
+        update.trang_thai,
         id,
       ]
     );
