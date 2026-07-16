@@ -292,31 +292,45 @@ router.put('/dong-tien-moi/:id', async (req, res) => {
   try {
     const id = req.params.id;
     const body = req.body || {};
-    const ngayGD = parseNgayGiaoDich(body.ngay_giao_dich);
-    const ngayHT = parseNgayHachToan(body.ngay_giao_dich);
+    const existing = await queryOne('SELECT * FROM dong_tien_moi WHERE id = ?', [id]);
+    if (!existing) {
+      return res.status(404).json({ error: 'Không tìm thấy dòng tiền' });
+    }
+    const field = (name, fallback = null) =>
+      Object.prototype.hasOwnProperty.call(body, name) ? body[name] : (existing[name] ?? fallback);
+    const ngayGiaoDichRaw = field('ngay_giao_dich');
+    const ngayGD = parseNgayGiaoDich(ngayGiaoDichRaw);
+    const ngayHT = parseNgayHachToan(ngayGiaoDichRaw);
+    const loaiGiaoDich = field('loai_giao_dich');
+    const chieuTien =
+      existing.loai_giao_dich === 'chuyen_khoan_noi_bo' &&
+      loaiGiaoDich === 'chuyen_khoan_noi_bo' &&
+      existing.chieu_tien
+        ? existing.chieu_tien
+        : field('chieu_tien');
     await query(
       `UPDATE dong_tien_moi SET ngay_giao_dich=?, ngay_hach_toan=?, loai_giao_dich=?, chieu_tien=?, tai_khoan_tien_id=?, tai_khoan_nhan_id=?, so_tien=?, doi_tuong_id=?, khach_hang_id=?, nha_cung_cap_id=?, hop_dong_id=?, hop_dong_mua_id=?, hang_muc_thu_chi_id=?, mo_ta_giao_dich=?, so_tai_khoan_doi_ung=?, ten_tai_khoan_doi_ung=?, so_du_sau_giao_dich=?, ma_giao_dich_ngan_hang=?, ghi_chu=?, trang_thai=? WHERE id=?`,
       [
         ngayGD,
         ngayHT,
-        body.loai_giao_dich,
-        body.chieu_tien || null,
-        body.tai_khoan_tien_id,
-        body.tai_khoan_nhan_id || null,
-        Number(body.so_tien) || 0,
-        body.doi_tuong_id || null,
-        body.khach_hang_id || null,
-        body.nha_cung_cap_id || null,
-        body.hop_dong_id || null,
-        body.hop_dong_mua_id || null,
-        body.hang_muc_thu_chi_id || null,
-        body.mo_ta_giao_dich || null,
-        body.so_tai_khoan_doi_ung || null,
-        body.ten_tai_khoan_doi_ung || null,
-        body.so_du_sau_giao_dich ?? null,
-        body.ma_giao_dich_ngan_hang ?? null,
-        body.ghi_chu || null,
-        body.trang_thai || 'hoan_thanh',
+        loaiGiaoDich,
+        chieuTien || null,
+        field('tai_khoan_tien_id'),
+        field('tai_khoan_nhan_id') || null,
+        Number(field('so_tien', 0)) || 0,
+        field('doi_tuong_id') || null,
+        field('khach_hang_id') || null,
+        field('nha_cung_cap_id') || null,
+        field('hop_dong_id') || null,
+        field('hop_dong_mua_id') || null,
+        field('hang_muc_thu_chi_id') || null,
+        field('mo_ta_giao_dich') || null,
+        field('so_tai_khoan_doi_ung') || null,
+        field('ten_tai_khoan_doi_ung') || null,
+        field('so_du_sau_giao_dich'),
+        field('ma_giao_dich_ngan_hang'),
+        field('ghi_chu') || null,
+        field('trang_thai', 'hoan_thanh') || 'hoan_thanh',
         id,
       ]
     );

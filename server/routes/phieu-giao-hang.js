@@ -209,26 +209,33 @@ router.put('/phieu-giao-hang/:id', async (req, res) => {
   try {
     const id = req.params.id;
     const body = req.body || {};
-    if (!body.hop_dong_id) {
+    const existing = await queryOne('SELECT * FROM phieu_giao_hang WHERE id = ?', [id]);
+    if (!existing) {
+      return res.status(404).json({ error: 'Không tìm thấy phiếu giao hàng' });
+    }
+    const field = (name, fallback = null) =>
+      Object.prototype.hasOwnProperty.call(body, name) ? body[name] : (existing[name] ?? fallback);
+    const hopDongId = field('hop_dong_id');
+    if (!hopDongId) {
       return res.status(400).json({ error: 'Phiếu giao hàng phải liên kết với hợp đồng' });
     }
-    const khachHangId = body.khach_hang_id || await khachHangIdFromHopDong(body.hop_dong_id);
-    const giaTriGhiNo = body.chi_tiet?.length
-      ? await calcGiaTriGhiNoFromChiTiet(body.chi_tiet, body.hop_dong_id)
-      : 0;
+    const khachHangId = field('khach_hang_id') || await khachHangIdFromHopDong(hopDongId);
+    const giaTriGhiNo = body.chi_tiet
+      ? await calcGiaTriGhiNoFromChiTiet(body.chi_tiet, hopDongId)
+      : existing.gia_tri_ghi_no;
 
     await query(
       `UPDATE phieu_giao_hang
        SET so_phieu=?, ngay_giao=?, khach_hang_id=?, hop_dong_id=?, gia_tri_ghi_no=?, noi_dung=?, nguoi_tao=?
        WHERE id=?`,
       [
-        body.so_phieu,
-        body.ngay_giao,
+        field('so_phieu'),
+        field('ngay_giao'),
         khachHangId,
-        body.hop_dong_id || null,
+        hopDongId || null,
         giaTriGhiNo,
-        body.noi_dung || '',
-        body.nguoi_tao || '',
+        field('noi_dung', '') || '',
+        field('nguoi_tao', '') || '',
         id,
       ]
     );
