@@ -22,6 +22,7 @@ import googleDriveRouter from './routes/google-drive.js';
 import cauHinhRouter from './routes/cau-hinh.js';
 import usersRouter from './routes/users.js';
 import { ensureSchema } from './utils/ensureSchema.js';
+import { getJwtSecret, requireAuth, requireAdmin } from './middleware/auth.js';
 
 dotenv.config();
 
@@ -31,6 +32,13 @@ const isProduction = process.env.NODE_ENV === 'production';
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
+
+try {
+  getJwtSecret();
+} catch (err) {
+  console.error(err.message);
+  process.exit(1);
+}
 
 app.use(cors());
 app.use(express.json());
@@ -57,7 +65,11 @@ app.get('/api/health', async (_req, res) => {
   }
 });
 
-app.get('/api/tables', async (_req, res) => {
+app.use('/api/auth', authRouter);
+app.use('/api', googleDriveRouter);
+app.use('/api', requireAuth);
+
+app.get('/api/tables', requireAdmin, async (_req, res) => {
   try {
     const rows = await query(
       `SELECT TABLE_NAME AS table_name
@@ -73,7 +85,6 @@ app.get('/api/tables', async (_req, res) => {
   }
 });
 
-app.use('/api/auth', authRouter);
 app.use('/api', dashboardRouter);
 app.use('/api', khachHangRouter);
 app.use('/api', baoGiaRouter);
@@ -87,7 +98,6 @@ app.use('/api', hangMucThuChiRouter);
 app.use('/api', nhaCungCapRouter);
 app.use('/api', hopDongMuaRouter);
 app.use('/api', dongTienMoiRouter);
-app.use('/api', googleDriveRouter);
 app.use('/api', cauHinhRouter);
 app.use('/api', usersRouter);
 
@@ -105,23 +115,31 @@ app.use((_req, res) => {
   res.status(404).json({ error: 'Not found' });
 });
 
-app.listen(PORT, async () => {
-  try {
-    await ensureSchema();
-  } catch (err) {
-    console.error('Schema ensure failed:', err.message);
-  }
-  console.log(`Phạm Gia API listening on http://localhost:${PORT}`);
-  console.log(`  Health:  http://localhost:${PORT}/api/health`);
-  console.log(`  Tables:  http://localhost:${PORT}/api/tables`);
-  console.log(`  Login:   POST http://localhost:${PORT}/api/auth/login`);
-  console.log(`  Stats:   http://localhost:${PORT}/api/dashboard-stats`);
-  console.log(`  Báo giá: http://localhost:${PORT}/api/bao-gia`);
-  console.log(`  Hợp đồng: http://localhost:${PORT}/api/hop-dong`);
-  console.log(`  PGH:     http://localhost:${PORT}/api/phieu-giao-hang`);
-  console.log(`  PGH/HĐ:  http://localhost:${PORT}/api/phieu-giao-hang-by?hop_dong_id=...`);
-  console.log(`  Dòng tiền: http://localhost:${PORT}/api/dong-tien-moi`);
-  console.log(`  Dòng tiền/HĐ: http://localhost:${PORT}/api/dong-tien-by?hop_dong_id=...`);
-  console.log(`  BG/KH:   http://localhost:${PORT}/api/bao-gia-by?khach_hang_id=...`);
-  console.log(`  HĐ/KH:   http://localhost:${PORT}/api/hop-dong-by?khach_hang_id=...`);
-});
+export default app;
+
+export function startServer() {
+  return app.listen(PORT, async () => {
+    try {
+      await ensureSchema();
+    } catch (err) {
+      console.error('Schema ensure failed:', err.message);
+    }
+    console.log(`Phạm Gia API listening on http://localhost:${PORT}`);
+    console.log(`  Health:  http://localhost:${PORT}/api/health`);
+    console.log(`  Tables:  http://localhost:${PORT}/api/tables`);
+    console.log(`  Login:   POST http://localhost:${PORT}/api/auth/login`);
+    console.log(`  Stats:   http://localhost:${PORT}/api/dashboard-stats`);
+    console.log(`  Báo giá: http://localhost:${PORT}/api/bao-gia`);
+    console.log(`  Hợp đồng: http://localhost:${PORT}/api/hop-dong`);
+    console.log(`  PGH:     http://localhost:${PORT}/api/phieu-giao-hang`);
+    console.log(`  PGH/HĐ:  http://localhost:${PORT}/api/phieu-giao-hang-by?hop_dong_id=...`);
+    console.log(`  Dòng tiền: http://localhost:${PORT}/api/dong-tien-moi`);
+    console.log(`  Dòng tiền/HĐ: http://localhost:${PORT}/api/dong-tien-by?hop_dong_id=...`);
+    console.log(`  BG/KH:   http://localhost:${PORT}/api/bao-gia-by?khach_hang_id=...`);
+    console.log(`  HĐ/KH:   http://localhost:${PORT}/api/hop-dong-by?khach_hang_id=...`);
+  });
+}
+
+if (process.env.NODE_ENV !== 'test') {
+  startServer();
+}
