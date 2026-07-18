@@ -10,6 +10,52 @@ function insertId(result) {
   return Number(result?.insertId ?? result?.[0]?.insertId);
 }
 
+function hasOwn(obj, key) {
+  return Object.prototype.hasOwnProperty.call(obj || {}, key);
+}
+
+function pick(existing, body, key, fallback = null) {
+  return hasOwn(body, key) ? body[key] : (existing?.[key] ?? fallback);
+}
+
+function pickNullable(existing, body, key) {
+  const value = pick(existing, body, key);
+  return value === '' || value === undefined ? null : value;
+}
+
+export function mergeDongTienUpdate(existing, body) {
+  const loaiGiaoDich = pick(existing, body, 'loai_giao_dich');
+  let chieuTien = pickNullable(existing, body, 'chieu_tien');
+  if (
+    existing?.loai_giao_dich === 'chuyen_khoan_noi_bo' &&
+    loaiGiaoDich === 'chuyen_khoan_noi_bo'
+  ) {
+    chieuTien = existing.chieu_tien ?? chieuTien;
+  }
+
+  return {
+    ngay_giao_dich: pick(existing, body, 'ngay_giao_dich'),
+    loai_giao_dich: loaiGiaoDich,
+    chieu_tien: chieuTien,
+    tai_khoan_tien_id: pick(existing, body, 'tai_khoan_tien_id'),
+    tai_khoan_nhan_id: pickNullable(existing, body, 'tai_khoan_nhan_id'),
+    so_tien: hasOwn(body, 'so_tien') ? (Number(body.so_tien) || 0) : (Number(existing?.so_tien) || 0),
+    doi_tuong_id: pickNullable(existing, body, 'doi_tuong_id'),
+    khach_hang_id: pickNullable(existing, body, 'khach_hang_id'),
+    nha_cung_cap_id: pickNullable(existing, body, 'nha_cung_cap_id'),
+    hop_dong_id: pickNullable(existing, body, 'hop_dong_id'),
+    hop_dong_mua_id: pickNullable(existing, body, 'hop_dong_mua_id'),
+    hang_muc_thu_chi_id: pickNullable(existing, body, 'hang_muc_thu_chi_id'),
+    mo_ta_giao_dich: pickNullable(existing, body, 'mo_ta_giao_dich'),
+    so_tai_khoan_doi_ung: pickNullable(existing, body, 'so_tai_khoan_doi_ung'),
+    ten_tai_khoan_doi_ung: pickNullable(existing, body, 'ten_tai_khoan_doi_ung'),
+    so_du_sau_giao_dich: pickNullable(existing, body, 'so_du_sau_giao_dich'),
+    ma_giao_dich_ngan_hang: pickNullable(existing, body, 'ma_giao_dich_ngan_hang'),
+    ghi_chu: pickNullable(existing, body, 'ghi_chu'),
+    trang_thai: pick(existing, body, 'trang_thai', 'hoan_thanh') || 'hoan_thanh',
+  };
+}
+
 const LIST_SELECT = `
   SELECT dt.*,
     tkt.ten_tai_khoan, tkt.loai_tai_khoan, tkt.ngan_hang,
@@ -292,31 +338,35 @@ router.put('/dong-tien-moi/:id', async (req, res) => {
   try {
     const id = req.params.id;
     const body = req.body || {};
-    const ngayGD = parseNgayGiaoDich(body.ngay_giao_dich);
-    const ngayHT = parseNgayHachToan(body.ngay_giao_dich);
+    const existing = await queryOne('SELECT * FROM dong_tien_moi WHERE id = ?', [id]);
+    if (!existing) return res.status(404).json({ error: 'Not found' });
+
+    const merged = mergeDongTienUpdate(existing, body);
+    const ngayGD = parseNgayGiaoDich(merged.ngay_giao_dich);
+    const ngayHT = parseNgayHachToan(merged.ngay_giao_dich);
     await query(
       `UPDATE dong_tien_moi SET ngay_giao_dich=?, ngay_hach_toan=?, loai_giao_dich=?, chieu_tien=?, tai_khoan_tien_id=?, tai_khoan_nhan_id=?, so_tien=?, doi_tuong_id=?, khach_hang_id=?, nha_cung_cap_id=?, hop_dong_id=?, hop_dong_mua_id=?, hang_muc_thu_chi_id=?, mo_ta_giao_dich=?, so_tai_khoan_doi_ung=?, ten_tai_khoan_doi_ung=?, so_du_sau_giao_dich=?, ma_giao_dich_ngan_hang=?, ghi_chu=?, trang_thai=? WHERE id=?`,
       [
         ngayGD,
         ngayHT,
-        body.loai_giao_dich,
-        body.chieu_tien || null,
-        body.tai_khoan_tien_id,
-        body.tai_khoan_nhan_id || null,
-        Number(body.so_tien) || 0,
-        body.doi_tuong_id || null,
-        body.khach_hang_id || null,
-        body.nha_cung_cap_id || null,
-        body.hop_dong_id || null,
-        body.hop_dong_mua_id || null,
-        body.hang_muc_thu_chi_id || null,
-        body.mo_ta_giao_dich || null,
-        body.so_tai_khoan_doi_ung || null,
-        body.ten_tai_khoan_doi_ung || null,
-        body.so_du_sau_giao_dich ?? null,
-        body.ma_giao_dich_ngan_hang ?? null,
-        body.ghi_chu || null,
-        body.trang_thai || 'hoan_thanh',
+        merged.loai_giao_dich,
+        merged.chieu_tien,
+        merged.tai_khoan_tien_id,
+        merged.tai_khoan_nhan_id,
+        merged.so_tien,
+        merged.doi_tuong_id,
+        merged.khach_hang_id,
+        merged.nha_cung_cap_id,
+        merged.hop_dong_id,
+        merged.hop_dong_mua_id,
+        merged.hang_muc_thu_chi_id,
+        merged.mo_ta_giao_dich,
+        merged.so_tai_khoan_doi_ung,
+        merged.ten_tai_khoan_doi_ung,
+        merged.so_du_sau_giao_dich,
+        merged.ma_giao_dich_ngan_hang,
+        merged.ghi_chu,
+        merged.trang_thai,
         id,
       ]
     );
