@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { pingDatabase, query } from './db.js';
+import { requireAdmin, requireAuth } from './middleware/auth.js';
 import authRouter from './routes/auth.js';
 import dashboardRouter from './routes/dashboard.js';
 import khachHangRouter from './routes/khach-hang.js';
@@ -25,7 +26,8 @@ import { ensureSchema } from './utils/ensureSchema.js';
 
 dotenv.config();
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const serverFile = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(serverFile);
 const distPath = path.join(__dirname, '../dist');
 const isProduction = process.env.NODE_ENV === 'production';
 
@@ -57,7 +59,10 @@ app.get('/api/health', async (_req, res) => {
   }
 });
 
-app.get('/api/tables', async (_req, res) => {
+app.use('/api/auth', authRouter);
+app.use('/api', googleDriveRouter);
+
+app.get('/api/tables', requireAdmin, async (_req, res) => {
   try {
     const rows = await query(
       `SELECT TABLE_NAME AS table_name
@@ -73,7 +78,7 @@ app.get('/api/tables', async (_req, res) => {
   }
 });
 
-app.use('/api/auth', authRouter);
+app.use('/api', requireAuth);
 app.use('/api', dashboardRouter);
 app.use('/api', khachHangRouter);
 app.use('/api', baoGiaRouter);
@@ -87,7 +92,6 @@ app.use('/api', hangMucThuChiRouter);
 app.use('/api', nhaCungCapRouter);
 app.use('/api', hopDongMuaRouter);
 app.use('/api', dongTienMoiRouter);
-app.use('/api', googleDriveRouter);
 app.use('/api', cauHinhRouter);
 app.use('/api', usersRouter);
 
@@ -105,23 +109,31 @@ app.use((_req, res) => {
   res.status(404).json({ error: 'Not found' });
 });
 
-app.listen(PORT, async () => {
-  try {
-    await ensureSchema();
-  } catch (err) {
-    console.error('Schema ensure failed:', err.message);
-  }
-  console.log(`Phạm Gia API listening on http://localhost:${PORT}`);
-  console.log(`  Health:  http://localhost:${PORT}/api/health`);
-  console.log(`  Tables:  http://localhost:${PORT}/api/tables`);
-  console.log(`  Login:   POST http://localhost:${PORT}/api/auth/login`);
-  console.log(`  Stats:   http://localhost:${PORT}/api/dashboard-stats`);
-  console.log(`  Báo giá: http://localhost:${PORT}/api/bao-gia`);
-  console.log(`  Hợp đồng: http://localhost:${PORT}/api/hop-dong`);
-  console.log(`  PGH:     http://localhost:${PORT}/api/phieu-giao-hang`);
-  console.log(`  PGH/HĐ:  http://localhost:${PORT}/api/phieu-giao-hang-by?hop_dong_id=...`);
-  console.log(`  Dòng tiền: http://localhost:${PORT}/api/dong-tien-moi`);
-  console.log(`  Dòng tiền/HĐ: http://localhost:${PORT}/api/dong-tien-by?hop_dong_id=...`);
-  console.log(`  BG/KH:   http://localhost:${PORT}/api/bao-gia-by?khach_hang_id=...`);
-  console.log(`  HĐ/KH:   http://localhost:${PORT}/api/hop-dong-by?khach_hang_id=...`);
-});
+export async function startServer(port = PORT) {
+  return app.listen(port, async () => {
+    try {
+      await ensureSchema();
+    } catch (err) {
+      console.error('Schema ensure failed:', err.message);
+    }
+    console.log(`Phạm Gia API listening on http://localhost:${port}`);
+    console.log(`  Health:  http://localhost:${port}/api/health`);
+    console.log(`  Tables:  http://localhost:${port}/api/tables`);
+    console.log(`  Login:   POST http://localhost:${port}/api/auth/login`);
+    console.log(`  Stats:   http://localhost:${port}/api/dashboard-stats`);
+    console.log(`  Báo giá: http://localhost:${port}/api/bao-gia`);
+    console.log(`  Hợp đồng: http://localhost:${port}/api/hop-dong`);
+    console.log(`  PGH:     http://localhost:${port}/api/phieu-giao-hang`);
+    console.log(`  PGH/HĐ:  http://localhost:${port}/api/phieu-giao-hang-by?hop_dong_id=...`);
+    console.log(`  Dòng tiền: http://localhost:${port}/api/dong-tien-moi`);
+    console.log(`  Dòng tiền/HĐ: http://localhost:${port}/api/dong-tien-by?hop_dong_id=...`);
+    console.log(`  BG/KH:   http://localhost:${port}/api/bao-gia-by?khach_hang_id=...`);
+    console.log(`  HĐ/KH:   http://localhost:${port}/api/hop-dong-by?khach_hang_id=...`);
+  });
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === serverFile) {
+  startServer();
+}
+
+export default app;
