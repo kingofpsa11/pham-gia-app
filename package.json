@@ -8,6 +8,7 @@
     "server": "node server/index.js",
     "start": "node server/index.js",
     "update-admin-email": "node server/scripts/update-admin-email.js",
+    "test": "node --test",
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview",
