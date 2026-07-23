@@ -22,6 +22,7 @@ import googleDriveRouter from './routes/google-drive.js';
 import cauHinhRouter from './routes/cau-hinh.js';
 import usersRouter from './routes/users.js';
 import { ensureSchema } from './utils/ensureSchema.js';
+import { requireAdmin, requireAuth } from './middleware/auth.js';
 
 dotenv.config();
 
@@ -57,7 +58,7 @@ app.get('/api/health', async (_req, res) => {
   }
 });
 
-app.get('/api/tables', async (_req, res) => {
+app.get('/api/tables', requireAdmin, async (_req, res) => {
   try {
     const rows = await query(
       `SELECT TABLE_NAME AS table_name
@@ -74,6 +75,9 @@ app.get('/api/tables', async (_req, res) => {
 });
 
 app.use('/api/auth', authRouter);
+app.use('/api', googleDriveRouter);
+
+app.use('/api', requireAuth);
 app.use('/api', dashboardRouter);
 app.use('/api', khachHangRouter);
 app.use('/api', baoGiaRouter);
@@ -87,7 +91,6 @@ app.use('/api', hangMucThuChiRouter);
 app.use('/api', nhaCungCapRouter);
 app.use('/api', hopDongMuaRouter);
 app.use('/api', dongTienMoiRouter);
-app.use('/api', googleDriveRouter);
 app.use('/api', cauHinhRouter);
 app.use('/api', usersRouter);
 
