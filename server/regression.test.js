@@ -20,7 +20,10 @@ async function request(path, options = {}) {
   const { port } = server.address();
 
   try {
-    const response = await fetch(`http://127.0.0.1:${port}${path}`, options);
+    const response = await fetch(`http://127.0.0.1:${port}${path}`, {
+      redirect: 'manual',
+      ...options,
+    });
     return {
       status: response.status,
       headers: response.headers,
