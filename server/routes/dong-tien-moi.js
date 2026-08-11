@@ -3,6 +3,7 @@ import { query, queryOne } from '../db.js';
 import { dbErrorResponse } from '../utils/errors.js';
 import { parsePaging, sqlLimitOffset } from '../utils/pagination.js';
 import { parseNgayGiaoDich, parseNgayHachToan } from '../utils/dongTienDate.js';
+import { patchValue } from '../utils/patchMerge.js';
 
 const router = Router();
 
@@ -202,17 +203,19 @@ router.post('/dong-tien-moi/bulk-update', async (req, res) => {
       const item = items[i] || {};
       const excelRow = item._excelRow || i + 2;
       try {
-        const ngayGD = parseNgayGiaoDich(item.ngay_giao_dich);
-        const ngayHT = parseNgayHachToan(item.ngay_giao_dich);
-        const soTien = Number(item.so_tien) || 0;
-        if (!item.loai_giao_dich || !item.tai_khoan_tien_id || soTien <= 0) {
+        const existing = item.id
+          ? await queryOne('SELECT * FROM dong_tien_moi WHERE id = ?', [item.id])
+          : null;
+        if (item.id && !existing) throw new Error(`Không tìm thấy ID ${item.id}`);
+        const value = (key) => patchValue(item, existing, key);
+        const ngayGD = parseNgayGiaoDich(value('ngay_giao_dich'));
+        const ngayHT = parseNgayHachToan(value('ngay_giao_dich'));
+        const soTien = Number(value('so_tien')) || 0;
+        if (!value('loai_giao_dich') || !value('tai_khoan_tien_id') || soTien <= 0) {
           throw new Error('Thiếu loại GD, tài khoản hoặc số tiền');
         }
 
         if (item.id) {
-          const exists = await queryOne('SELECT id FROM dong_tien_moi WHERE id = ?', [item.id]);
-          if (!exists) throw new Error(`Không tìm thấy ID ${item.id}`);
-
           await query(
             `UPDATE dong_tien_moi SET
               ngay_giao_dich=?, ngay_hach_toan=?, loai_giao_dich=?, chieu_tien=?, tai_khoan_tien_id=?, tai_khoan_nhan_id=?,
@@ -223,23 +226,23 @@ router.post('/dong-tien-moi/bulk-update', async (req, res) => {
             [
               ngayGD,
               ngayHT,
-              item.loai_giao_dich,
-              item.chieu_tien || null,
-              item.tai_khoan_tien_id,
-              item.tai_khoan_nhan_id || null,
+              value('loai_giao_dich'),
+              value('chieu_tien') || null,
+              value('tai_khoan_tien_id'),
+              value('tai_khoan_nhan_id') || null,
               soTien,
-              item.hang_muc_thu_chi_id || null,
-              item.mo_ta_giao_dich || null,
-              item.khach_hang_id || null,
-              item.nha_cung_cap_id || null,
-              item.hop_dong_id || null,
-              item.hop_dong_mua_id || null,
-              item.so_tai_khoan_doi_ung || null,
-              item.ten_tai_khoan_doi_ung || null,
-              item.so_du_sau_giao_dich ?? null,
-              item.ma_giao_dich_ngan_hang || null,
-              item.ghi_chu || null,
-              item.trang_thai || 'hoan_thanh',
+              value('hang_muc_thu_chi_id') || null,
+              value('mo_ta_giao_dich') || null,
+              value('khach_hang_id') || null,
+              value('nha_cung_cap_id') || null,
+              value('hop_dong_id') || null,
+              value('hop_dong_mua_id') || null,
+              value('so_tai_khoan_doi_ung') || null,
+              value('ten_tai_khoan_doi_ung') || null,
+              value('so_du_sau_giao_dich') ?? null,
+              value('ma_giao_dich_ngan_hang') || null,
+              value('ghi_chu') || null,
+              value('trang_thai') || 'hoan_thanh',
               item.id,
             ]
           );
@@ -292,31 +295,34 @@ router.put('/dong-tien-moi/:id', async (req, res) => {
   try {
     const id = req.params.id;
     const body = req.body || {};
-    const ngayGD = parseNgayGiaoDich(body.ngay_giao_dich);
-    const ngayHT = parseNgayHachToan(body.ngay_giao_dich);
+    const existing = await queryOne('SELECT * FROM dong_tien_moi WHERE id = ?', [id]);
+    if (!existing) return res.status(404).json({ error: 'Not found' });
+    const value = (key) => patchValue(body, existing, key);
+    const ngayGD = parseNgayGiaoDich(value('ngay_giao_dich'));
+    const ngayHT = parseNgayHachToan(value('ngay_giao_dich'));
     await query(
       `UPDATE dong_tien_moi SET ngay_giao_dich=?, ngay_hach_toan=?, loai_giao_dich=?, chieu_tien=?, tai_khoan_tien_id=?, tai_khoan_nhan_id=?, so_tien=?, doi_tuong_id=?, khach_hang_id=?, nha_cung_cap_id=?, hop_dong_id=?, hop_dong_mua_id=?, hang_muc_thu_chi_id=?, mo_ta_giao_dich=?, so_tai_khoan_doi_ung=?, ten_tai_khoan_doi_ung=?, so_du_sau_giao_dich=?, ma_giao_dich_ngan_hang=?, ghi_chu=?, trang_thai=? WHERE id=?`,
       [
         ngayGD,
         ngayHT,
-        body.loai_giao_dich,
-        body.chieu_tien || null,
-        body.tai_khoan_tien_id,
-        body.tai_khoan_nhan_id || null,
-        Number(body.so_tien) || 0,
-        body.doi_tuong_id || null,
-        body.khach_hang_id || null,
-        body.nha_cung_cap_id || null,
-        body.hop_dong_id || null,
-        body.hop_dong_mua_id || null,
-        body.hang_muc_thu_chi_id || null,
-        body.mo_ta_giao_dich || null,
-        body.so_tai_khoan_doi_ung || null,
-        body.ten_tai_khoan_doi_ung || null,
-        body.so_du_sau_giao_dich ?? null,
-        body.ma_giao_dich_ngan_hang ?? null,
-        body.ghi_chu || null,
-        body.trang_thai || 'hoan_thanh',
+        value('loai_giao_dich'),
+        value('chieu_tien') || null,
+        value('tai_khoan_tien_id'),
+        value('tai_khoan_nhan_id') || null,
+        Number(value('so_tien')) || 0,
+        value('doi_tuong_id') || null,
+        value('khach_hang_id') || null,
+        value('nha_cung_cap_id') || null,
+        value('hop_dong_id') || null,
+        value('hop_dong_mua_id') || null,
+        value('hang_muc_thu_chi_id') || null,
+        value('mo_ta_giao_dich') || null,
+        value('so_tai_khoan_doi_ung') || null,
+        value('ten_tai_khoan_doi_ung') || null,
+        value('so_du_sau_giao_dich') ?? null,
+        value('ma_giao_dich_ngan_hang') ?? null,
+        value('ghi_chu') || null,
+        value('trang_thai') || 'hoan_thanh',
         id,
       ]
     );
