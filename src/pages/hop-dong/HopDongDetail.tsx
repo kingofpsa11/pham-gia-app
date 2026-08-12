@@ -344,6 +344,16 @@ export default function HopDongDetail() {
                 <p className="text-xs font-medium text-gray-500">Phí VC</p>
                 <p className="text-sm font-semibold text-gray-900">{formatVND(hopDong.phi_van_chuyen)}</p>
               </div>
+              <div>
+                <p className="text-xs font-medium text-gray-500">Tỷ lệ tạm ứng</p>
+                <p className="text-sm font-semibold text-gray-900">
+                  {hopDong.ty_le_tam_ung != null ? `${Number(hopDong.ty_le_tam_ung)}%` : '30%'}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs font-medium text-gray-500">Giá trị tạm ứng</p>
+                <p className="text-sm font-semibold text-gray-900">{formatVND(hopDong.gia_tri_tam_ung || 0)}</p>
+              </div>
               <div className="sm:col-span-2 lg:col-span-1">
                 <p className="text-xs font-medium text-gray-500">Mô tả</p>
                 <p className="text-sm font-semibold text-gray-900">{hopDong.mo_ta_noi_dung || '--'}</p>
@@ -485,6 +495,18 @@ export default function HopDongDetail() {
                   <div className="flex items-center justify-between">
                     <span className="text-base font-semibold text-gray-900">Tổng thanh toán</span>
                     <span className="text-lg font-bold text-primary-600">{formatVND(tongThanhToan)}</span>
+                  </div>
+                </div>
+                <div className="border-t border-dashed border-gray-200 pt-2 mt-2 space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-gray-500">Tỷ lệ tạm ứng</span>
+                    <span className="font-semibold text-gray-900">
+                      {hopDong.ty_le_tam_ung != null ? `${Number(hopDong.ty_le_tam_ung)}%` : '30%'}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-gray-500">Giá trị tạm ứng</span>
+                    <span className="font-semibold text-amber-700">{formatVND(hopDong.gia_tri_tam_ung || 0)}</span>
                   </div>
                 </div>
               </div>

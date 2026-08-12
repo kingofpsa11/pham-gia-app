@@ -304,4 +304,37 @@ export async function ensureSchema() {
       `INSERT INTO app_schema_patches (patch_key) VALUES ('dong_tien_ngay_vn_wallclock_v1')`
     );
   }
+
+  const hopDongTamUngPatch = await queryOne(
+    `SELECT patch_key FROM app_schema_patches WHERE patch_key = 'hop_dong_tam_ung_v1'`,
+  );
+  if (!hopDongTamUngPatch) {
+    const tyLeCol = await queryOne(
+      `SELECT COLUMN_NAME AS name FROM information_schema.columns
+       WHERE table_schema = DATABASE() AND table_name = 'hop_dong' AND COLUMN_NAME = 'ty_le_tam_ung'`,
+    );
+    if (!tyLeCol) {
+      await query(
+        `ALTER TABLE hop_dong
+         ADD COLUMN ty_le_tam_ung DECIMAL(8,2) NOT NULL DEFAULT 30
+         COMMENT 'Tỷ lệ tạm ứng (%) trên tổng giá trị HĐ gồm thuế'
+         AFTER che_do_van_chuyen`,
+      );
+      console.log('Schema: added hop_dong.ty_le_tam_ung');
+    }
+    const giaTriCol = await queryOne(
+      `SELECT COLUMN_NAME AS name FROM information_schema.columns
+       WHERE table_schema = DATABASE() AND table_name = 'hop_dong' AND COLUMN_NAME = 'gia_tri_tam_ung'`,
+    );
+    if (!giaTriCol) {
+      await query(
+        `ALTER TABLE hop_dong
+         ADD COLUMN gia_tri_tam_ung DECIMAL(18,2) NOT NULL DEFAULT 0
+         COMMENT 'Giá trị tạm ứng (VND)'
+         AFTER ty_le_tam_ung`,
+      );
+      console.log('Schema: added hop_dong.gia_tri_tam_ung');
+    }
+    await query(`INSERT INTO app_schema_patches (patch_key) VALUES ('hop_dong_tam_ung_v1')`);
+  }
 }

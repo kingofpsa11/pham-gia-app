@@ -216,6 +216,10 @@ export default function HopDongForm({ mode, hopDongId, initialData, fromBaoGia, 
   const [moTaNoiDung, setMoTaNoiDung] = useState('');
   const [tenFolder, setTenFolder] = useState('');
   const [trangThai, setTrangThai] = useState('Hieu luc');
+  const [tyLeTamUng, setTyLeTamUng] = useState(30);
+  const [giaTriTamUng, setGiaTriTamUng] = useState(0);
+  /** Bỏ qua 1 lần tự tính tạm ứng khi vừa load HĐ (giữ giá trị đã lưu). */
+  const skipTamUngRecalcRef = useRef(false);
 
   // KH search dropdown
   const [khSearch, setKhSearch] = useState('');
@@ -319,6 +323,10 @@ export default function HopDongForm({ mode, hopDongId, initialData, fromBaoGia, 
     setMoTaNoiDung(hd.mo_ta_noi_dung || '');
     setTenFolder((hd as any).ten_folder_du_an || '');
     setTrangThai(hd.trang_thai || 'Hieu luc');
+    const tyLe = hd.ty_le_tam_ung != null ? Number(hd.ty_le_tam_ung) : 30;
+    setTyLeTamUng(Number.isFinite(tyLe) ? tyLe : 30);
+    setGiaTriTamUng(Number(hd.gia_tri_tam_ung) || 0);
+    skipTamUngRecalcRef.current = true;
     const baseRows = ((hd.chi_tiet as HopDongChiTiet[]) || []).map(toChiTietRow);
     const rowsSynced = baseRows.map((row) => syncLaiTuGiaBan(row, baseRows, cheDo, phi));
     const rows = rowsSynced.map((r) => {
@@ -570,6 +578,29 @@ export default function HopDongForm({ mode, hopDongId, initialData, fromBaoGia, 
   const phiVCRieng = cheDoVanChuyen === 0 ? phiVCNum : 0;
   const tongThanhToan = calcTongThanhToan(tongTruocVAT, tongVAT, phiVCRieng);
 
+  // Khi tổng thanh toán đổi → tính lại giá trị tạm ứng theo tỷ lệ hiện tại
+  useEffect(() => {
+    if (skipTamUngRecalcRef.current) {
+      skipTamUngRecalcRef.current = false;
+      return;
+    }
+    setGiaTriTamUng(Math.round((tongThanhToan * tyLeTamUng) / 100));
+  }, [tongThanhToan]); // eslint-disable-line react-hooks/exhaustive-deps -- chỉ theo tổng TT; % đổi qua handler
+
+  function handleTyLeTamUngChange(val: number) {
+    const next = Number.isFinite(val) ? val : 0;
+    setTyLeTamUng(next);
+    setGiaTriTamUng(Math.round((tongThanhToan * next) / 100));
+  }
+
+  function handleGiaTriTamUngChange(val: number) {
+    const next = Number.isFinite(val) ? Math.round(val) : 0;
+    setGiaTriTamUng(next);
+    if (tongThanhToan > 0) {
+      setTyLeTamUng(Math.round((next / tongThanhToan) * 10000) / 100);
+    }
+  }
+
   const tongGiaVonThuan = activeChiTiet.reduce(
     (s, r) => s + Number(r.so_luong) * Number(r.don_gia_von),
     0
@@ -635,6 +666,8 @@ export default function HopDongForm({ mode, hopDongId, initialData, fromBaoGia, 
         che_do_van_chuyen: cheDoVanChuyen,
         phi_van_chuyen: phiVCNum,
         mo_ta_noi_dung: moTaNoiDung.trim() || null,
+        ty_le_tam_ung: tyLeTamUng,
+        gia_tri_tam_ung: giaTriTamUng,
         chi_tiet: validChiTiet.map((r) => {
           const vcRow = withVCForSave.find((x) => x.tempId === r.tempId);
           const giaChua = Number(vcRow?.gia_ban_chua_van_chuyen ?? r.gia_ban_chua_van_chuyen ?? r.gia_ban_thuc_te) || 0;
@@ -1043,6 +1076,34 @@ export default function HopDongForm({ mode, hopDongId, initialData, fromBaoGia, 
               <span className="text-lg font-bold text-blue-700">
                 {tongThanhToan > 0 ? formatVND(tongThanhToan) : <span className="text-blue-400">0</span>}
               </span>
+            </div>
+            <div className="border-t border-dashed border-gray-200 pt-3 mt-3 space-y-2">
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Tạm ứng</p>
+              <p className="text-[11px] text-gray-400">Mặc định 30% tổng thanh toán (đã gồm thuế). Có thể sửa tỷ lệ hoặc số tiền.</p>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">Tỷ lệ tạm ứng (%)</label>
+                  <NumInput
+                    value={tyLeTamUng}
+                    onChange={handleTyLeTamUngChange}
+                    className="input-field text-sm text-right w-full"
+                    min={0}
+                    step={0.01}
+                    format="number"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">Giá trị tạm ứng</label>
+                  <NumInput
+                    value={giaTriTamUng}
+                    onChange={handleGiaTriTamUngChange}
+                    className="input-field text-sm text-right w-full"
+                    min={0}
+                    isInteger
+                    format="money"
+                  />
+                </div>
+              </div>
             </div>
           </div>
         </div>

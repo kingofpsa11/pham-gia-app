@@ -47,6 +47,8 @@ function mergeHopDongUpdate(existing, body) {
     trang_thai: body.trang_thai ?? existing.trang_thai ?? 'Hieu luc',
     phi_van_chuyen: body.phi_van_chuyen ?? existing.phi_van_chuyen ?? 0,
     che_do_van_chuyen: body.che_do_van_chuyen ?? existing.che_do_van_chuyen ?? 0,
+    ty_le_tam_ung: body.ty_le_tam_ung ?? existing.ty_le_tam_ung ?? 30,
+    gia_tri_tam_ung: body.gia_tri_tam_ung ?? existing.gia_tri_tam_ung ?? 0,
   };
 }
 
@@ -182,8 +184,8 @@ router.post('/hop-dong', async (req, res) => {
       return res.status(409).json({ error: messageHopDongTrung(String(body.so_hop_dong).trim(), nam) });
     }
     const result = await query(
-      `INSERT INTO hop_dong (khach_hang_id, ten_du_an, so_hop_dong, ngay_hop_dong, file_hop_dong_id, mo_ta_noi_dung, trang_thai, phi_van_chuyen, che_do_van_chuyen)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO hop_dong (khach_hang_id, ten_du_an, so_hop_dong, ngay_hop_dong, file_hop_dong_id, mo_ta_noi_dung, trang_thai, phi_van_chuyen, che_do_van_chuyen, ty_le_tam_ung, gia_tri_tam_ung)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         body.khach_hang_id,
         body.ten_du_an || '',
@@ -194,6 +196,8 @@ router.post('/hop-dong', async (req, res) => {
         body.trang_thai || 'Hieu luc',
         body.phi_van_chuyen || 0,
         body.che_do_van_chuyen || 0,
+        body.ty_le_tam_ung ?? 30,
+        body.gia_tri_tam_ung || 0,
       ]
     );
     const hopDongId = insertId(result);
@@ -245,7 +249,7 @@ router.put('/hop-dong/:id', async (req, res) => {
       return res.status(409).json({ error: messageHopDongTrung(String(merged.so_hop_dong).trim(), nam) });
     }
     await query(
-      `UPDATE hop_dong SET khach_hang_id=?, ten_du_an=?, so_hop_dong=?, ngay_hop_dong=?, file_hop_dong_id=?, mo_ta_noi_dung=?, trang_thai=?, phi_van_chuyen=?, che_do_van_chuyen=? WHERE id=?`,
+      `UPDATE hop_dong SET khach_hang_id=?, ten_du_an=?, so_hop_dong=?, ngay_hop_dong=?, file_hop_dong_id=?, mo_ta_noi_dung=?, trang_thai=?, phi_van_chuyen=?, che_do_van_chuyen=?, ty_le_tam_ung=?, gia_tri_tam_ung=? WHERE id=?`,
       [
         merged.khach_hang_id,
         merged.ten_du_an,
@@ -256,6 +260,8 @@ router.put('/hop-dong/:id', async (req, res) => {
         merged.trang_thai,
         merged.phi_van_chuyen,
         merged.che_do_van_chuyen,
+        merged.ty_le_tam_ung,
+        merged.gia_tri_tam_ung,
         id,
       ]
     );

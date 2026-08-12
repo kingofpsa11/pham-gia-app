@@ -52,6 +52,10 @@ export interface HopDong {
   trang_thai: string;
   phi_van_chuyen: number;
   che_do_van_chuyen: number;
+  /** Tỷ lệ tạm ứng (%) trên tổng HĐ gồm thuế — mặc định 30 */
+  ty_le_tam_ung?: number;
+  /** Giá trị tạm ứng (VND) */
+  gia_tri_tam_ung?: number;
   khach_hang?: KhachHang;
   chi_tiet?: HopDongChiTiet[];
 }

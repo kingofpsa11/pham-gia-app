@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { query, queryOne } from '../db.js';
 import { dbErrorResponse } from '../utils/errors.js';
 import { parsePaging, sqlLimitOffset } from '../utils/pagination.js';
-import { calcTongThanhToanBaoGia } from '../utils/baoGiaCalc.js';
+import { calcTongThanhToanBaoGia, calcTongThanhToanHopDong } from '../utils/baoGiaCalc.js';
 import {
   parseNamFromDate,
   findBaoGiaTrungSo,
@@ -305,8 +305,8 @@ router.post('/convert-bao-gia', async (req, res) => {
       ).padStart(3, '0')}`;
 
     const result = await query(
-      `INSERT INTO hop_dong (khach_hang_id, ten_du_an, so_hop_dong, ngay_hop_dong, mo_ta_noi_dung, trang_thai, phi_van_chuyen, che_do_van_chuyen)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO hop_dong (khach_hang_id, ten_du_an, so_hop_dong, ngay_hop_dong, mo_ta_noi_dung, trang_thai, phi_van_chuyen, che_do_van_chuyen, ty_le_tam_ung, gia_tri_tam_ung)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         bg.khach_hang_id,
         bg.ten_du_an,
@@ -316,6 +316,8 @@ router.post('/convert-bao-gia', async (req, res) => {
         'Hieu luc',
         bg.phi_van_chuyen,
         bg.che_do_van_chuyen,
+        30,
+        0,
       ]
     );
     const hopDongId = insertId(result);
