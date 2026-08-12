@@ -16,9 +16,13 @@ const pool = mysql.createPool({
   dateStrings: true,
 });
 
-export async function query(sql, params = []) {
+let queryImpl = async (sql, params = []) => {
   const [rows] = await pool.query(sql, params);
   return rows;
+};
+
+export async function query(sql, params = []) {
+  return queryImpl(sql, params);
 }
 
 export async function queryOne(sql, params = []) {
@@ -28,6 +32,23 @@ export async function queryOne(sql, params = []) {
 
 export async function pingDatabase() {
   await query('SELECT 1 AS ok');
+}
+
+export function setQueryImplementationForTest(fn) {
+  if (process.env.NODE_ENV !== 'test') {
+    throw new Error('setQueryImplementationForTest is only available in tests');
+  }
+  queryImpl = fn;
+}
+
+export function resetQueryImplementationForTest() {
+  if (process.env.NODE_ENV !== 'test') {
+    throw new Error('resetQueryImplementationForTest is only available in tests');
+  }
+  queryImpl = async (sql, params = []) => {
+    const [rows] = await pool.query(sql, params);
+    return rows;
+  };
 }
 
 export default pool;
