@@ -7,4 +7,3 @@ export function mergeOmittedFields(input, existing, fields) {
   }
   return merged;
 }
-
