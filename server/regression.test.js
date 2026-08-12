@@ -266,4 +266,3 @@ test('cashflow bulk update preserves omitted imported bank metadata', async () =
   assert.equal(update.params[16], 'BANK-REF-2');
   assert.equal(update.params[17], 'new bulk note');
 });
-
