@@ -3,12 +3,40 @@ import { query, queryOne } from '../db.js';
 import { dbErrorResponse } from '../utils/errors.js';
 import { parsePaging, sqlLimitOffset } from '../utils/pagination.js';
 import { parseNgayGiaoDich, parseNgayHachToan } from '../utils/dongTienDate.js';
+import { mergeOmittedFields } from '../utils/patchMerge.js';
 
 const router = Router();
 
 function insertId(result) {
   return Number(result?.insertId ?? result?.[0]?.insertId);
 }
+
+function hasOwn(obj, field) {
+  return Object.prototype.hasOwnProperty.call(obj || {}, field);
+}
+
+const DONG_TIEN_UPDATE_FIELDS = [
+  'ngay_giao_dich',
+  'ngay_hach_toan',
+  'loai_giao_dich',
+  'chieu_tien',
+  'tai_khoan_tien_id',
+  'tai_khoan_nhan_id',
+  'so_tien',
+  'doi_tuong_id',
+  'khach_hang_id',
+  'nha_cung_cap_id',
+  'hop_dong_id',
+  'hop_dong_mua_id',
+  'hang_muc_thu_chi_id',
+  'mo_ta_giao_dich',
+  'so_tai_khoan_doi_ung',
+  'ten_tai_khoan_doi_ung',
+  'so_du_sau_giao_dich',
+  'ma_giao_dich_ngan_hang',
+  'ghi_chu',
+  'trang_thai',
+];
 
 const LIST_SELECT = `
   SELECT dt.*,
@@ -202,16 +230,18 @@ router.post('/dong-tien-moi/bulk-update', async (req, res) => {
       const item = items[i] || {};
       const excelRow = item._excelRow || i + 2;
       try {
-        const ngayGD = parseNgayGiaoDich(item.ngay_giao_dich);
-        const ngayHT = parseNgayHachToan(item.ngay_giao_dich);
-        const soTien = Number(item.so_tien) || 0;
-        if (!item.loai_giao_dich || !item.tai_khoan_tien_id || soTien <= 0) {
-          throw new Error('Thiếu loại GD, tài khoản hoặc số tiền');
-        }
-
         if (item.id) {
-          const exists = await queryOne('SELECT id FROM dong_tien_moi WHERE id = ?', [item.id]);
-          if (!exists) throw new Error(`Không tìm thấy ID ${item.id}`);
+          const existing = await queryOne('SELECT * FROM dong_tien_moi WHERE id = ?', [item.id]);
+          if (!existing) throw new Error(`Không tìm thấy ID ${item.id}`);
+          const merged = mergeOmittedFields(item, existing, DONG_TIEN_UPDATE_FIELDS);
+          const ngayGD = parseNgayGiaoDich(merged.ngay_giao_dich);
+          const ngayHT = hasOwn(item, 'ngay_giao_dich')
+            ? parseNgayHachToan(merged.ngay_giao_dich)
+            : merged.ngay_hach_toan;
+          const soTien = Number(merged.so_tien) || 0;
+          if (!merged.loai_giao_dich || !merged.tai_khoan_tien_id || soTien <= 0) {
+            throw new Error('Thiếu loại GD, tài khoản hoặc số tiền');
+          }
 
           await query(
             `UPDATE dong_tien_moi SET
@@ -223,28 +253,34 @@ router.post('/dong-tien-moi/bulk-update', async (req, res) => {
             [
               ngayGD,
               ngayHT,
-              item.loai_giao_dich,
-              item.chieu_tien || null,
-              item.tai_khoan_tien_id,
-              item.tai_khoan_nhan_id || null,
+              merged.loai_giao_dich,
+              merged.chieu_tien || null,
+              merged.tai_khoan_tien_id,
+              merged.tai_khoan_nhan_id || null,
               soTien,
-              item.hang_muc_thu_chi_id || null,
-              item.mo_ta_giao_dich || null,
-              item.khach_hang_id || null,
-              item.nha_cung_cap_id || null,
-              item.hop_dong_id || null,
-              item.hop_dong_mua_id || null,
-              item.so_tai_khoan_doi_ung || null,
-              item.ten_tai_khoan_doi_ung || null,
-              item.so_du_sau_giao_dich ?? null,
-              item.ma_giao_dich_ngan_hang || null,
-              item.ghi_chu || null,
-              item.trang_thai || 'hoan_thanh',
-              item.id,
+              merged.hang_muc_thu_chi_id || null,
+              merged.mo_ta_giao_dich || null,
+              merged.khach_hang_id || null,
+              merged.nha_cung_cap_id || null,
+              merged.hop_dong_id || null,
+              merged.hop_dong_mua_id || null,
+              merged.so_tai_khoan_doi_ung || null,
+              merged.ten_tai_khoan_doi_ung || null,
+              merged.so_du_sau_giao_dich ?? null,
+              merged.ma_giao_dich_ngan_hang || null,
+              merged.ghi_chu || null,
+              merged.trang_thai || 'hoan_thanh',
+              merged.id,
             ]
           );
           updated++;
         } else {
+          const ngayGD = parseNgayGiaoDich(item.ngay_giao_dich);
+          const ngayHT = parseNgayHachToan(item.ngay_giao_dich);
+          const soTien = Number(item.so_tien) || 0;
+          if (!item.loai_giao_dich || !item.tai_khoan_tien_id || soTien <= 0) {
+            throw new Error('Thiếu loại GD, tài khoản hoặc số tiền');
+          }
           const now = new Date();
           const maGD = `GD${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}${String(now.getTime()).slice(-6)}${i}`;
           await query(
@@ -291,9 +327,14 @@ router.post('/dong-tien-moi/bulk-update', async (req, res) => {
 router.put('/dong-tien-moi/:id', async (req, res) => {
   try {
     const id = req.params.id;
-    const body = req.body || {};
+    const existing = await queryOne('SELECT * FROM dong_tien_moi WHERE id = ?', [id]);
+    if (!existing) return res.status(404).json({ error: 'Not found' });
+    const originalBody = req.body || {};
+    const body = mergeOmittedFields(originalBody, existing, DONG_TIEN_UPDATE_FIELDS);
     const ngayGD = parseNgayGiaoDich(body.ngay_giao_dich);
-    const ngayHT = parseNgayHachToan(body.ngay_giao_dich);
+    const ngayHT = hasOwn(originalBody, 'ngay_giao_dich')
+      ? parseNgayHachToan(body.ngay_giao_dich)
+      : body.ngay_hach_toan;
     await query(
       `UPDATE dong_tien_moi SET ngay_giao_dich=?, ngay_hach_toan=?, loai_giao_dich=?, chieu_tien=?, tai_khoan_tien_id=?, tai_khoan_nhan_id=?, so_tien=?, doi_tuong_id=?, khach_hang_id=?, nha_cung_cap_id=?, hop_dong_id=?, hop_dong_mua_id=?, hang_muc_thu_chi_id=?, mo_ta_giao_dich=?, so_tai_khoan_doi_ung=?, ten_tai_khoan_doi_ung=?, so_du_sau_giao_dich=?, ma_giao_dich_ngan_hang=?, ghi_chu=?, trang_thai=? WHERE id=?`,
       [
