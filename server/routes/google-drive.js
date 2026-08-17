@@ -5,6 +5,7 @@ import {
   isGoogleDriveConfigured,
   buildGoogleAuthUrl,
   completeOAuth,
+  googleRedirectUri,
   saveDriveTokens,
   getDriveTokenRow,
   deleteDriveTokens,
@@ -76,12 +77,12 @@ router.get('/google-drive/auth-url', requireAuth, async (req, res) => {
   }
 });
 
-/** GET /api/google-drive/callback — Google OAuth redirect (public) */
-router.get('/google-drive/callback', async (req, res) => {
+async function handleGoogleCallback(req, res, callbackPath) {
   const stateRaw = String(req.query.state || '');
   const parsed = parseState(stateRaw);
   const redirectPath = parsed?.redirect || '/cai-dat';
   const appOrigin = parsed?.origin || '';
+  const oauthRedirectUri = googleRedirectUri(callbackPath);
 
   try {
     const errorParam = req.query.error;
@@ -98,12 +99,12 @@ router.get('/google-drive/callback', async (req, res) => {
       return redirectToApp(res, appOrigin, redirectPath, 'drive_error=not_configured');
     }
 
-    const { tokenData, googleEmail } = await completeOAuth(String(code));
+    const { tokenData, googleEmail } = await completeOAuth(String(code), oauthRedirectUri);
     await saveDriveTokens(parsed.userId, tokenData, googleEmail);
 
     return redirectToApp(res, appOrigin, redirectPath, 'drive_connected=1');
   } catch (err) {
-    console.error('GET /google-drive/callback error:', err.message);
+    console.error(`GET ${callbackPath} error:`, err.message);
     return redirectToApp(
       res,
       appOrigin,
@@ -111,7 +112,17 @@ router.get('/google-drive/callback', async (req, res) => {
       `drive_error=server_error&detail=${encodeURIComponent(err.message || '')}`,
     );
   }
-});
+}
+
+/** GET /api/google-drive/callback — Google OAuth redirect (public) */
+router.get('/google-drive/callback', (req, res) =>
+  handleGoogleCallback(req, res, '/api/google-drive/callback'),
+);
+
+/** Legacy redirect URI (Google Cloud Console cũ) */
+router.get('/google/callback', (req, res) =>
+  handleGoogleCallback(req, res, '/api/google/callback'),
+);
 
 /** DELETE /api/google-drive/disconnect */
 router.delete('/google-drive/disconnect', requireAuth, async (req, res) => {

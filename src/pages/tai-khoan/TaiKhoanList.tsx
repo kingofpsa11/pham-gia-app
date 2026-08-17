@@ -7,7 +7,6 @@ import Modal from '../../components/ui/Modal';
 import ConfirmDialog from '../../components/ui/ConfirmDialog';
 import EmptyState from '../../components/ui/EmptyState';
 import { CreditCard, Plus, Pencil, Trash2, ChevronDown, ChevronRight, Wallet, Banknote, Smartphone } from 'lucide-react';
-import { ckBalanceDelta, resolveCkChieu } from '../../lib/dongTienCk';
 import type { TaiKhoanTien, DongTienMoi } from '../../types';
 
 interface TaiKhoanWithBalance extends TaiKhoanTien {
@@ -78,27 +77,8 @@ export default function TaiKhoanList() {
   const fetchTaiKhoan = useCallback(async () => {
     setLoading(true);
     try {
-      const { data: accounts } = await taiKhoanTienApi.list();
-      const list = (accounts || []) as TaiKhoanTien[];
-
-      const withBalance: TaiKhoanWithBalance[] = await Promise.all(
-        list.map(async (tk) => {
-          const { data: rows } = await dongTienMoiApi.list({ tai_khoan_tien_id: String(tk.id), limit: 99999 });
-          const so_du_hien_tai = (rows || []).reduce((sum, dt) => {
-            const amt = Number(dt.so_tien) || 0;
-            if (dt.loai_giao_dich === 'thu') return sum + amt;
-            if (dt.loai_giao_dich === 'chi') return sum - amt;
-            if (dt.loai_giao_dich === 'chuyen_khoan_noi_bo') {
-              const chieu = resolveCkChieu(dt, list, rows || []);
-              return sum + ckBalanceDelta(dt, tk.id, chieu);
-            }
-            return sum;
-          }, Number(tk.so_du_dau_ky) || 0);
-          return { ...tk, so_du_hien_tai };
-        })
-      );
-
-      setData(withBalance);
+      const { data: accounts } = await taiKhoanTienApi.balances();
+      setData((accounts || []) as TaiKhoanWithBalance[]);
     } catch (err) {
       console.error('Lỗi tải danh sách tài khoản:', err);
       addToast('error', 'Không thể tải danh sách tài khoản');
@@ -112,7 +92,7 @@ export default function TaiKhoanList() {
   async function fetchTransactions(taiKhoanId: number) {
     setTransactionsLoading(true);
     try {
-      const { data: rows } = await dongTienMoiApi.list({ tai_khoan_tien_id: String(taiKhoanId), limit: 99999 });
+      const { data: rows } = await dongTienMoiApi.list({ tai_khoan_tien_id: String(taiKhoanId), limit: 200 });
       setTransactions((rows as DongTienMoi[]) || []);
     } catch {
       addToast('error', 'Không thể tải lịch sử giao dịch');

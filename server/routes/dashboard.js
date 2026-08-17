@@ -13,45 +13,43 @@ router.get('/dashboard-stats', async (_req, res) => {
       new Date(year, month, 0).getDate()
     ).padStart(2, '0')}`;
 
-    const [baoGiaCount, hopDongHieuLuc, dongTienMonth, phieuGiaoGhiNo, taiKhoanAll] =
-      await Promise.all([
-        queryOne(
-          `SELECT COUNT(*) AS total FROM bao_gia WHERE ngay_bao_gia >= ? AND ngay_bao_gia <= ?`,
-          [firstDay, lastDay]
-        ),
-        queryOne(`SELECT COUNT(*) AS total FROM hop_dong WHERE trang_thai = 'Hieu luc'`),
-        query(
-          `SELECT ghi_no, ghi_co, khach_hang_id, loai_chi_phi_id FROM dong_tien
-           WHERE DATE(ngay_gio_giao_dich) >= ? AND DATE(ngay_gio_giao_dich) <= ?`,
-          [firstDay, lastDay]
-        ),
-        queryOne(
-          `SELECT SUM(pghct.so_luong_giao * COALESCE(hdct.gia_hop_dong, 0)) AS tong
-           FROM phieu_giao_hang_chi_tiet pghct
-           LEFT JOIN hop_dong_chi_tiet hdct ON hdct.id = pghct.hop_dong_chi_tiet_id`
-        ),
-        query(`SELECT id, ten_tai_khoan FROM tai_khoan`),
-      ]);
-
-    const tongThu = dongTienMonth.reduce((s, d) => s + Number(d.ghi_no || 0), 0);
-    const tongChi = dongTienMonth.reduce((s, d) => s + Number(d.ghi_co || 0), 0);
-    const tongChiPhi = dongTienMonth
-      .filter((d) => d.loai_chi_phi_id)
-      .reduce((s, d) => s + Number(d.ghi_co || 0), 0);
-    const tongGhiNo = Number(phieuGiaoGhiNo?.tong || 0);
-    const tongDaThu = dongTienMonth
-      .filter((d) => d.khach_hang_id)
-      .reduce((s, d) => s + Number(d.ghi_no || 0), 0);
-
-    const allDongTien = await query('SELECT ghi_no, ghi_co, tai_khoan_id FROM dong_tien');
-    const accountBalances = taiKhoanAll.map((tk) => {
-      const balance = allDongTien
-        .filter((d) => d.tai_khoan_id === tk.id)
-        .reduce((s, d) => s + Number(d.ghi_no || 0) - Number(d.ghi_co || 0), 0);
-      return { tai_khoan_id: tk.id, ten_tai_khoan: tk.ten_tai_khoan, so_du: balance };
-    });
-
-    const [hopDongRecent, dongTienRecent] = await Promise.all([
+    const [
+      baoGiaCount,
+      hopDongHieuLuc,
+      dongTienAgg,
+      phieuGiaoGhiNo,
+      accountBalances,
+      hopDongRecent,
+      dongTienRecent,
+    ] = await Promise.all([
+      queryOne(
+        `SELECT COUNT(*) AS total FROM bao_gia WHERE ngay_bao_gia >= ? AND ngay_bao_gia <= ?`,
+        [firstDay, lastDay]
+      ),
+      queryOne(`SELECT COUNT(*) AS total FROM hop_dong WHERE trang_thai = 'Hieu luc'`),
+      queryOne(
+        `SELECT
+           COALESCE(SUM(ghi_no), 0) AS tong_thu,
+           COALESCE(SUM(ghi_co), 0) AS tong_chi,
+           COALESCE(SUM(CASE WHEN loai_chi_phi_id IS NOT NULL THEN ghi_co ELSE 0 END), 0) AS tong_chi_phi,
+           COALESCE(SUM(CASE WHEN khach_hang_id IS NOT NULL THEN ghi_no ELSE 0 END), 0) AS tong_da_thu
+         FROM dong_tien
+         WHERE DATE(ngay_gio_giao_dich) >= ? AND DATE(ngay_gio_giao_dich) <= ?`,
+        [firstDay, lastDay]
+      ),
+      queryOne(
+        `SELECT COALESCE(SUM(pghct.so_luong_giao * COALESCE(hdct.gia_hop_dong, 0)), 0) AS tong
+         FROM phieu_giao_hang_chi_tiet pghct
+         LEFT JOIN hop_dong_chi_tiet hdct ON hdct.id = pghct.hop_dong_chi_tiet_id`
+      ),
+      query(
+        `SELECT tk.id AS tai_khoan_id, tk.ten_tai_khoan,
+                COALESCE(SUM(COALESCE(dt.ghi_no, 0) - COALESCE(dt.ghi_co, 0)), 0) AS so_du
+         FROM tai_khoan tk
+         LEFT JOIN dong_tien dt ON dt.tai_khoan_id = tk.id
+         GROUP BY tk.id, tk.ten_tai_khoan
+         ORDER BY tk.ten_tai_khoan`
+      ),
       query(
         `SELECT hd.*, kh.ten_cong_ty FROM hop_dong hd
          LEFT JOIN khach_hang kh ON hd.khach_hang_id = kh.id
@@ -64,6 +62,12 @@ router.get('/dashboard-stats', async (_req, res) => {
       ),
     ]);
 
+    const tongThu = Number(dongTienAgg?.tong_thu) || 0;
+    const tongChi = Number(dongTienAgg?.tong_chi) || 0;
+    const tongChiPhi = Number(dongTienAgg?.tong_chi_phi) || 0;
+    const tongDaThu = Number(dongTienAgg?.tong_da_thu) || 0;
+    const tongGhiNo = Number(phieuGiaoGhiNo?.tong) || 0;
+
     return res.json({
       tong_bao_gia_thang: baoGiaCount?.total || 0,
       tong_hop_dong_hieu_luc: hopDongHieuLuc?.total || 0,
@@ -71,7 +75,11 @@ router.get('/dashboard-stats', async (_req, res) => {
       tong_tien_da_chi: tongChi,
       cong_no_phai_thu: tongGhiNo - tongDaThu,
       tong_chi_phi_thang: tongChiPhi,
-      so_du_tai_khoan: accountBalances,
+      so_du_tai_khoan: (accountBalances || []).map((r) => ({
+        tai_khoan_id: r.tai_khoan_id,
+        ten_tai_khoan: r.ten_tai_khoan,
+        so_du: Number(r.so_du) || 0,
+      })),
       hop_dong_moi_nhat: hopDongRecent,
       dong_tien_moi_nhat: dongTienRecent,
     });

@@ -23,8 +23,10 @@ import {
   isChiTietRowTrong,
   namTuNgay,
   trangThaiHopDongLabel,
+  buildTenFolderHopDong,
+  driveFolderUrl,
 } from '../../lib/utils';
-import { Save, Plus, Trash2, ClipboardList, ClipboardPaste, FileSpreadsheet, RefreshCw, Search, X } from 'lucide-react';
+import { Save, Plus, Trash2, ClipboardList, ClipboardPaste, FileSpreadsheet, RefreshCw, Search, X, ExternalLink } from 'lucide-react';
 import ChiTietSttCell from '../../components/shared/ChiTietSttCell';
 import LoiNhuanGopSummary from '../../components/shared/LoiNhuanGopSummary';
 import KhachHangFilterField from '../../components/shared/KhachHangFilterField';
@@ -102,6 +104,50 @@ function roundGia1K(value: number): number {
 
 function giaHopDongFromBanVaChenh(giaBanCoVc: number, chenhPct: number): number {
   return roundGia1K(calcGiaBanGoiY(giaBanCoVc, Number(chenhPct) || 0));
+}
+
+function chenhFromGiaHd(giaHD: number, giaBanCoVc: number): number {
+  if (giaBanCoVc <= 0) return 0;
+  return Math.round(((Number(giaHD) - giaBanCoVc) / giaBanCoVc) * 100 * 100) / 100;
+}
+
+function giaHdHienThi(row: ChiTietRow): number {
+  return Number(row.gia_hop_dong) || 0;
+}
+
+/** Giữ giá HĐ đã nhập; cập nhật CL% theo giá bán hiện tại (SL đổi không kéo giá HĐ). */
+function mapRowsKeepGiaHdSyncChenh(
+  rows: ChiTietRow[],
+  cheDo: number,
+  phi: number
+): ChiTietRow[] {
+  const active = rows.filter((r) => !r.deleted);
+  return rows.map((row) => {
+    if (row.deleted) return row;
+    const giaBanCoVc = getGiaBanCoVcForRow(row, active, cheDo, phi);
+    return { ...row, chenh_lech_phan_tram: chenhFromGiaHd(giaHdHienThi(row), giaBanCoVc) };
+  });
+}
+
+/** Tính lại giá HĐ từ CL% + giá bán. `onlyTempId` = chỉ dòng đó; dòng khác giữ giá HĐ. */
+function mapRowsRecalcGiaHd(
+  rows: ChiTietRow[],
+  cheDo: number,
+  phi: number,
+  onlyTempId?: string
+): ChiTietRow[] {
+  const active = rows.filter((r) => !r.deleted);
+  return rows.map((row) => {
+    if (row.deleted) return row;
+    const giaBanCoVc = getGiaBanCoVcForRow(row, active, cheDo, phi);
+    if (onlyTempId && row.tempId !== onlyTempId) {
+      return { ...row, chenh_lech_phan_tram: chenhFromGiaHd(giaHdHienThi(row), giaBanCoVc) };
+    }
+    return {
+      ...row,
+      gia_hop_dong: giaHopDongFromBanVaChenh(giaBanCoVc, Number(row.chenh_lech_phan_tram) || 0),
+    };
+  });
 }
 
 function rowsForVanChuyen(rows: ChiTietRow[]): ChiTietRow[] {
@@ -209,17 +255,24 @@ export default function HopDongForm({ mode, hopDongId, initialData, fromBaoGia, 
   const [khachHangId, setKhachHangId] = useState('');
   const [khachHangName, setKhachHangName] = useState('');
   const [soHopDong, setSoHopDong] = useState('');
+  const soHopDongRef = useRef(soHopDong);
+  soHopDongRef.current = soHopDong;
   const [ngayHopDong, setNgayHopDong] = useState(todayVN());
   const [tenDuAn, setTenDuAn] = useState('');
   const [cheDoVanChuyen, setCheDoVanChuyen] = useState<number>(0);
   const [phiVanChuyen, setPhiVanChuyen] = useState(0);
   const [moTaNoiDung, setMoTaNoiDung] = useState('');
   const [tenFolder, setTenFolder] = useState('');
+  const [idFolder, setIdFolder] = useState('');
+  const [creatingFolder, setCreatingFolder] = useState(false);
+  const folderTouchedRef = useRef(false);
   const [trangThai, setTrangThai] = useState('Hieu luc');
   const [tyLeTamUng, setTyLeTamUng] = useState(30);
   const [giaTriTamUng, setGiaTriTamUng] = useState(0);
   /** Bỏ qua 1 lần tự tính tạm ứng khi vừa load HĐ (giữ giá trị đã lưu). */
   const skipTamUngRecalcRef = useRef(false);
+  /** Bỏ qua 1 lần tính lại giá HĐ khi load form (giữ đơn giá đã lưu). */
+  const skipGiaHdFromVcRef = useRef(false);
 
   // KH search dropdown
   const [khSearch, setKhSearch] = useState('');
@@ -277,7 +330,6 @@ export default function HopDongForm({ mode, hopDongId, initialData, fromBaoGia, 
 
   useEffect(() => {
     if (mode === 'create' && fromBaoGia) {
-      setSoHopDong(generateSoHopDong());
       setKhachHangId(String(fromBaoGia.khach_hang_id));
       setKhachHangName(fromBaoGia.ten_cong_ty);
       setKhSearch(fromBaoGia.ten_cong_ty);
@@ -286,12 +338,37 @@ export default function HopDongForm({ mode, hopDongId, initialData, fromBaoGia, 
       setPhiVanChuyen(Number(fromBaoGia.phi_van_chuyen) || 0);
       const rows: ChiTietRow[] = (fromBaoGia.chi_tiet || []).map(buildChiTietRowFromBaoGia);
       setChiTiet(rows.length > 0 ? rows : [emptyChiTiet()]);
-    } else if (mode === 'create') {
-      setSoHopDong(generateSoHopDong());
     } else if (initialData) {
       populateFromData(initialData);
     }
   }, [mode, initialData, fromBaoGia]);
+
+  useEffect(() => {
+    if (mode !== 'create' || !isValidVNDate(ngayHopDong)) return;
+    const nam = namTuNgay(ngayHopDong);
+    const current = soHopDongRef.current.trim();
+    const stillAuto = !current || /^\d+\/H[ĐD]MB\/\d{4}\/PG-?$/.test(current);
+    if (!stillAuto) return;
+    let cancelled = false;
+    hopDongApi.soTiepTheo(nam)
+      .then((res) => {
+        if (!cancelled) setSoHopDong(res.data?.so || generateSoHopDong(nam));
+      })
+      .catch(() => {
+        if (!cancelled) setSoHopDong(generateSoHopDong(nam));
+      });
+    return () => { cancelled = true; };
+  }, [mode, ngayHopDong]);
+
+  const tenFolderGoiY = useMemo(
+    () => buildTenFolderHopDong(soHopDong, khachHangName, tenDuAn),
+    [soHopDong, khachHangName, tenDuAn]
+  );
+
+  useEffect(() => {
+    if (folderTouchedRef.current || idFolder) return;
+    if (tenFolderGoiY) setTenFolder(tenFolderGoiY);
+  }, [tenFolderGoiY, idFolder]);
 
   // Load bao gia when filter changes
   useEffect(() => {
@@ -322,11 +399,14 @@ export default function HopDongForm({ mode, hopDongId, initialData, fromBaoGia, 
     setPhiVanChuyen(phi);
     setMoTaNoiDung(hd.mo_ta_noi_dung || '');
     setTenFolder((hd as any).ten_folder_du_an || '');
+    setIdFolder((hd as any).id_folder_du_an || '');
+    folderTouchedRef.current = Boolean((hd as any).ten_folder_du_an);
     setTrangThai(hd.trang_thai || 'Hieu luc');
     const tyLe = hd.ty_le_tam_ung != null ? Number(hd.ty_le_tam_ung) : 30;
     setTyLeTamUng(Number.isFinite(tyLe) ? tyLe : 30);
     setGiaTriTamUng(Number(hd.gia_tri_tam_ung) || 0);
     skipTamUngRecalcRef.current = true;
+    skipGiaHdFromVcRef.current = true;
     const baseRows = ((hd.chi_tiet as HopDongChiTiet[]) || []).map(toChiTietRow);
     const rowsSynced = baseRows.map((row) => syncLaiTuGiaBan(row, baseRows, cheDo, phi));
     const rows = rowsSynced.map((r) => {
@@ -336,7 +416,7 @@ export default function HopDongForm({ mode, hopDongId, initialData, fromBaoGia, 
         giaBanCoVc > 0
           ? Math.round(((giaHD - giaBanCoVc) / giaBanCoVc) * 100 * 100) / 100
           : Number(r.chenh_lech_phan_tram) || 0;
-      return { ...r, chenh_lech_phan_tram: chenh };
+      return { ...r, chenh_lech_phan_tram: chenh, gia_hop_dong: giaHD };
     });
     setChiTiet(rows.length > 0 ? rows : [emptyChiTiet()]);
   }
@@ -376,19 +456,19 @@ export default function HopDongForm({ mode, hopDongId, initialData, fromBaoGia, 
       if (idx < 0) return prev;
       const next = [...prev];
       next.splice(idx, 0, newRow);
-      return next;
+      return mapRowsKeepGiaHdSyncChenh(next, cheDoVanChuyen, phiVCNum);
     });
   }
 
   function insertRowAfter(afterTempId: string | null) {
     const newRow = emptyChiTiet();
     setChiTiet((prev) => {
-      if (afterTempId === null) return [newRow, ...prev];
+      if (afterTempId === null) return mapRowsKeepGiaHdSyncChenh([newRow, ...prev], cheDoVanChuyen, phiVCNum);
       const idx = prev.findIndex((r) => r.tempId === afterTempId);
-      if (idx < 0) return [...prev, newRow];
+      if (idx < 0) return mapRowsKeepGiaHdSyncChenh([...prev, newRow], cheDoVanChuyen, phiVCNum);
       const next = [...prev];
       next.splice(idx + 1, 0, newRow);
-      return next;
+      return mapRowsKeepGiaHdSyncChenh(next, cheDoVanChuyen, phiVCNum);
     });
   }
 
@@ -432,9 +512,10 @@ export default function HopDongForm({ mode, hopDongId, initialData, fromBaoGia, 
       const kept = prev.filter((r) => r.deleted || !isChiTietRowTrong(r.ten_san_pham));
       const merged = [...kept, ...rows];
       const active = merged.filter((r) => !r.deleted);
-      return merged.map((row) =>
+      const withLai = merged.map((row) =>
         row.deleted ? row : syncLaiTuGiaBan(row, active, cheDoVanChuyen, phiVCNum)
       );
+      return mapRowsKeepGiaHdSyncChenh(withLai, cheDoVanChuyen, phiVCNum);
     });
     setShowExcelPaste(false);
     setExcelText('');
@@ -444,11 +525,15 @@ export default function HopDongForm({ mode, hopDongId, initialData, fromBaoGia, 
   function removeChiTietRow(tempId: string) {
     setChiTiet((prev) => {
       const row = prev.find((r) => r.tempId === tempId);
+      let next = prev;
       if (row && !row.isNew) {
-        return prev.map((r) => r.tempId === tempId ? { ...r, deleted: true } : r);
+        next = prev.map((r) => (r.tempId === tempId ? { ...r, deleted: true } : r));
+      } else if (prev.filter((r) => !r.deleted).length <= 1) {
+        return prev;
+      } else {
+        next = prev.filter((r) => r.tempId !== tempId);
       }
-      if (prev.filter((r) => !r.deleted).length <= 1) return prev;
-      return prev.filter((r) => r.tempId !== tempId);
+      return mapRowsKeepGiaHdSyncChenh(next, cheDoVanChuyen, phiVCNum);
     });
   }
 
@@ -459,7 +544,7 @@ export default function HopDongForm({ mode, hopDongId, initialData, fromBaoGia, 
   ) {
     setChiTiet((prev) => {
       const active = prev.filter((r) => !r.deleted);
-      return prev.map((row) => {
+      const next = prev.map((row) => {
         if (row.tempId !== tempId) return row;
 
         let updated: ChiTietRow =
@@ -508,36 +593,52 @@ export default function HopDongForm({ mode, hopDongId, initialData, fromBaoGia, 
 
         if (field === 'so_luong') {
           updated.so_luong = Number(value) || 1;
-          const activeWith = active.map((r) => (r.tempId === tempId ? updated : r));
-          updated = syncLaiTuGiaBan(updated, activeWith, cheDoVanChuyen, phiVCNum);
         }
 
         if (field === 'gia_hop_dong') {
           updated.gia_hop_dong = Number(value);
-          const activeWith = active.map((r) => (r.tempId === tempId ? updated : r));
-          const giaBanCoVc = getGiaBanCoVcForRow(updated, activeWith, cheDoVanChuyen, phiVCNum);
-          if (giaBanCoVc > 0) {
-            updated.chenh_lech_phan_tram = Math.round(
-              ((Number(updated.gia_hop_dong) - giaBanCoVc) / giaBanCoVc) * 100 * 100
-            ) / 100;
-          }
+        }
+
+        if (field === 'chenh_lech_phan_tram') {
+          updated.chenh_lech_phan_tram = Number(value) || 0;
         }
 
         return updated;
       });
+
+      const recalcHdFields: Array<typeof field> = [
+        'don_gia_von',
+        'lai_suat_phan_tram',
+        'gia_ban_co_vc',
+        'gia_ban_thuc_te',
+        'gia_ban_chua_van_chuyen',
+        'chenh_lech_phan_tram',
+      ];
+      if (recalcHdFields.includes(field)) {
+        return mapRowsRecalcGiaHd(next, cheDoVanChuyen, phiVCNum, tempId);
+      }
+      if (field === 'so_luong' || field === 'gia_hop_dong') {
+        return mapRowsKeepGiaHdSyncChenh(next, cheDoVanChuyen, phiVCNum);
+      }
+      return next;
     });
   }
 
-  // Đổi phí VC / chế độ VC → giá bán đổi theo phân bổ → tính lại lãi %
+  // Đổi phí VC / chế độ VC → tính lại giá bán phân bổ và giá HĐ
   useEffect(() => {
     setChiTiet((prev) => {
       const active = prev.filter((r) => !r.deleted);
       if (active.length === 0) return prev;
-      return prev.map((row) => {
+      const withLai = prev.map((row) => {
         if (row.deleted) return row;
         const activeWith = active.map((r) => (r.tempId === row.tempId ? row : r));
         return syncLaiTuGiaBan(row, activeWith, cheDoVanChuyen, phiVCNum);
       });
+      if (skipGiaHdFromVcRef.current) {
+        skipGiaHdFromVcRef.current = false;
+        return withLai;
+      }
+      return mapRowsRecalcGiaHd(withLai, cheDoVanChuyen, phiVCNum);
     });
   }, [cheDoVanChuyen, phiVCNum]);
 
@@ -562,16 +663,11 @@ export default function HopDongForm({ mode, hopDongId, initialData, fromBaoGia, 
     don_gia_von: r.don_gia_von,
   }));
 
-  const calcItemsHD = activeChiTiet.map((r) => {
-    const vcRow = withVCItems.find((x) => x.tempId === r.tempId);
-    const giaBanCoVc = vcRow?.gia_ban_thuc_te ?? (Number(r.gia_ban_chua_van_chuyen) || 0);
-    const giaHD = giaHopDongFromBanVaChenh(giaBanCoVc, Number(r.chenh_lech_phan_tram) || 0);
-    return {
-      so_luong: r.so_luong,
-      gia_ban_thuc_te: giaHD,
-      thue_suat: r.thue_suat,
-    };
-  });
+  const calcItemsHD = activeChiTiet.map((r) => ({
+    so_luong: r.so_luong,
+    gia_ban_thuc_te: giaHdHienThi(r),
+    thue_suat: r.thue_suat,
+  }));
 
   const tongTruocVAT = calcTongTruocVAT(calcItemsHD);
   const tongVAT = calcTongVAT(calcItemsHD);
@@ -619,6 +715,30 @@ export default function HopDongForm({ mode, hopDongId, initialData, fromBaoGia, 
     const item = calcItemsHD[i];
     return s + calcVAT(calcThanhTienBan(item.so_luong, item.gia_ban_thuc_te), 10);
   }, 0);
+
+  async function handleTaoFolder() {
+    if (mode !== 'edit' || !hopDongId) {
+      addToast('warning', 'Folder sẽ được tạo tự động khi bạn lưu hợp đồng.');
+      return;
+    }
+    setCreatingFolder(true);
+    try {
+      const result = await hopDongApi.taoFolder(hopDongId, {
+        ten_folder_du_an: tenFolder.trim() || undefined,
+      });
+      if (result.data?.ten_folder_du_an) setTenFolder(result.data.ten_folder_du_an);
+      if (result.data?.id_folder_du_an) setIdFolder(result.data.id_folder_du_an);
+      if (result.drive_warning && !result.drive?.id_folder) {
+        addToast('error', result.drive_warning);
+        return;
+      }
+      addToast('success', `Đã tạo thư mục Drive: ${result.drive?.ten_folder || result.data?.ten_folder_du_an}`);
+    } catch (err) {
+      addToast('error', err instanceof Error ? err.message : 'Không tạo được thư mục Drive');
+    } finally {
+      setCreatingFolder(false);
+    }
+  }
 
   async function handleSave() {
     if (!khachHangId) { addToast('warning', 'Vui lòng chọn khách hàng'); return; }
@@ -668,11 +788,10 @@ export default function HopDongForm({ mode, hopDongId, initialData, fromBaoGia, 
         mo_ta_noi_dung: moTaNoiDung.trim() || null,
         ty_le_tam_ung: tyLeTamUng,
         gia_tri_tam_ung: giaTriTamUng,
+        ten_folder_du_an: tenFolder.trim() || null,
         chi_tiet: validChiTiet.map((r) => {
           const vcRow = withVCForSave.find((x) => x.tempId === r.tempId);
           const giaChua = Number(vcRow?.gia_ban_chua_van_chuyen ?? r.gia_ban_chua_van_chuyen ?? r.gia_ban_thuc_te) || 0;
-          const giaBanCoVc = vcRow?.gia_ban_thuc_te ?? giaChua;
-          const giaHD = giaHopDongFromBanVaChenh(giaBanCoVc, Number(r.chenh_lech_phan_tram) || 0);
           return {
             ten_san_pham: (r.ten_san_pham || '').trim(),
             don_vi: (r.don_vi || '').trim(),
@@ -682,17 +801,31 @@ export default function HopDongForm({ mode, hopDongId, initialData, fromBaoGia, 
             gia_ban_thuc_te: giaChua,
             thue_suat: r.thue_suat,
             chenh_lech_phan_tram: r.chenh_lech_phan_tram || 0,
-            gia_hop_dong: giaHD,
+            gia_hop_dong: giaHdHienThi(r),
           };
         }),
       };
 
       if (mode === 'create') {
         const result = await hopDongApi.create(payload);
+        if (result.data?.ten_folder_du_an) setTenFolder(result.data.ten_folder_du_an);
+        if (result.data?.id_folder_du_an) setIdFolder(result.data.id_folder_du_an);
+        if (result.drive_warning) {
+          addToast('warning', result.drive_warning);
+        } else if (result.drive?.ten_folder) {
+          addToast('success', `Đã tạo thư mục Drive: ${result.drive.ten_folder}`);
+        }
         addToast('success', 'Tạo hợp đồng thành công');
         onSaved(result.data.id);
       } else {
-        await hopDongApi.update(hopDongId!, payload);
+        const result = await hopDongApi.update(hopDongId!, payload);
+        if (result.data?.ten_folder_du_an) setTenFolder(result.data.ten_folder_du_an);
+        if (result.data?.id_folder_du_an) setIdFolder(result.data.id_folder_du_an);
+        if (result.drive_warning) {
+          addToast('warning', result.drive_warning);
+        } else if (result.drive?.created && result.drive?.ten_folder) {
+          addToast('success', `Đã tạo thư mục Drive: ${result.drive.ten_folder}`);
+        }
         addToast('success', 'Cập nhật hợp đồng thành công');
         onSaved(hopDongId!);
       }
@@ -718,7 +851,7 @@ export default function HopDongForm({ mode, hopDongId, initialData, fromBaoGia, 
               value={soHopDong}
               onChange={(e) => setSoHopDong(e.target.value)}
               className="input-field text-sm"
-              placeholder="Số HĐ..."
+              placeholder="23/HĐMB/2026/PG-"
             />
           </EntityFormField>
 
@@ -832,17 +965,37 @@ export default function HopDongForm({ mode, hopDongId, initialData, fromBaoGia, 
               <input
                 type="text"
                 value={tenFolder}
-                onChange={(e) => setTenFolder(e.target.value)}
+                onChange={(e) => {
+                  folderTouchedRef.current = true;
+                  setTenFolder(e.target.value);
+                }}
                 className="input-field text-sm flex-1 min-w-0"
-                placeholder="Tên folder..."
+                placeholder={tenFolderGoiY || 'Tên folder...'}
               />
+              {idFolder ? (
+                <a
+                  href={driveFolderUrl(idFolder)}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="h-10 shrink-0 px-3 border border-gray-200 rounded-lg text-xs font-semibold text-gray-600 hover:bg-gray-50 inline-flex items-center gap-1"
+                  title="Mở trên Google Drive"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  Mở
+                </a>
+              ) : null}
               <button
                 type="button"
-                className="h-10 shrink-0 px-4 bg-primary-600 text-white rounded-lg text-xs font-semibold hover:bg-primary-700 transition-colors"
+                onClick={handleTaoFolder}
+                disabled={creatingFolder}
+                className="h-10 shrink-0 px-4 bg-primary-600 text-white rounded-lg text-xs font-semibold hover:bg-primary-700 transition-colors disabled:opacity-60"
               >
-                Tạo
+                {creatingFolder ? 'Đang tạo...' : idFolder ? 'Tạo lại' : 'Tạo'}
               </button>
             </div>
+            <p className="mt-1 text-[11px] text-gray-400">
+              {namTuNgay(ngayHopDong)} / Hợp đồng / {tenFolder.trim() || tenFolderGoiY || '...'} / BV · Đầu ra · Đầu vào
+            </p>
           </EntityFormField>
 
           <EntityFormField label="Chế độ vận chuyển" className="sm:col-span-1 lg:col-span-2">
@@ -953,7 +1106,7 @@ export default function HopDongForm({ mode, hopDongId, initialData, fromBaoGia, 
               {activeChiTiet.map((row, idx) => {
                 const vcRow = withVCItems.find((x) => x.tempId === row.tempId);
                 const giaBanCoVc = vcRow?.gia_ban_thuc_te ?? (Number(row.gia_ban_chua_van_chuyen) || 0);
-                const giaHD = giaHopDongFromBanVaChenh(giaBanCoVc, Number(row.chenh_lech_phan_tram) || 0);
+                const giaHD = giaHdHienThi(row);
                 const thanhTien = calcThanhTienBan(row.so_luong, giaHD);
                 return (
                   <tr key={row.tempId} className="group border-b border-gray-100 hover:bg-blue-50/30 transition-colors">

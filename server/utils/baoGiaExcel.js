@@ -11,10 +11,6 @@ function fmtDate(d) {
   return `${String(dt.getDate()).padStart(2, '0')}/${String(dt.getMonth() + 1).padStart(2, '0')}/${dt.getFullYear()}`;
 }
 
-function fmtNum(n) {
-  return new Intl.NumberFormat('vi-VN').format(Math.round(n || 0));
-}
-
 function escXml(s) {
   return String(s)
     .replace(/&/g, '&amp;')
@@ -70,8 +66,11 @@ function rebuildSharedStrings(origXml, newTexts) {
   const sstBodyStart = origXml.indexOf('>', sstStart) + 1;
   const sstEnd = origXml.lastIndexOf('</sst>');
   if (sstStart === -1 || sstEnd === -1) return origXml;
-  const tag = origXml.slice(sstStart, sstBodyStart)
-    .replace(/count="[^"]*"/, `count="${newTexts.length}"`)
+  const origTag = origXml.slice(sstStart, sstBodyStart);
+  const origCount = parseInt((origTag.match(/count="(\d+)"/) || [])[1], 10);
+  const count = Number.isFinite(origCount) ? Math.max(origCount, newTexts.length) : newTexts.length;
+  const tag = origTag
+    .replace(/count="[^"]*"/, `count="${count}"`)
     .replace(/uniqueCount="[^"]*"/, `uniqueCount="${newTexts.length}"`);
   return origXml.slice(0, sstStart) + tag + newTexts.map(buildSiXml).join('') + origXml.slice(sstEnd);
 }
@@ -128,10 +127,130 @@ function parseCells(rowXml) {
   return cells;
 }
 
-function buildItemRow(templateXml, newRowNum, ssReplace, numericReplace) {
+function parseStylesLookup(stylesXml) {
+  const customFmts = new Map();
+  for (const m of stylesXml.matchAll(/<numFmt numFmtId="(\d+)" formatCode="([^"]+)"/g)) {
+    customFmts.set(parseInt(m[1], 10), m[2]);
+  }
+  const xfs = [...stylesXml.matchAll(/<xf ([^/>]+)\/?>/g)].map((m) => m[1]);
+  return { customFmts, xfs };
+}
+
+function getNumFmtId(xfAttrs, xfs) {
+  let numFmtId = parseInt((xfAttrs.match(/numFmtId="(\d+)"/) || [])[1] || '0', 10);
+  if (!xfAttrs.includes('applyNumberFormat="1"')) {
+    const xfId = parseInt((xfAttrs.match(/xfId="(\d+)"/) || [])[1] || '0', 10);
+    const parent = xfs[xfId];
+    if (parent) {
+      numFmtId = parseInt((parent.match(/numFmtId="(\d+)"/) || [])[1] || String(numFmtId), 10);
+    }
+  }
+  return numFmtId;
+}
+
+function isPercentNumFmt(numFmtId, customFmts) {
+  if (numFmtId === 9 || numFmtId === 10) return true;
+  return (customFmts.get(numFmtId) || '').includes('%');
+}
+
+function findPercentStyleIdx(stylesLookup) {
+  const { xfs, customFmts } = stylesLookup;
+  for (let i = 0; i < xfs.length; i++) {
+    if (isPercentNumFmt(getNumFmtId(xfs[i], xfs), customFmts)) return String(i);
+  }
+  return '';
+}
+
+function resolveThueStyleIdx(templateCells, colThue, stylesLookup) {
+  const thueCell = templateCells.find((c) => c.col === colThue);
+  if (thueCell?.styleIdx) {
+    const xf = stylesLookup.xfs[parseInt(thueCell.styleIdx, 10)];
+    if (xf && isPercentNumFmt(getNumFmtId(xf, stylesLookup.xfs), stylesLookup.customFmts)) {
+      return thueCell.styleIdx;
+    }
+  }
+  return findPercentStyleIdx(stylesLookup) || thueCell?.styleIdx || '';
+}
+
+function colToNum(col) {
+  let n = 0;
+  for (const c of col) n = n * 26 + (c.charCodeAt(0) - 64);
+  return n;
+}
+
+function getMergeSpanForCol(sheetXml, col, rowNum) {
+  const ref = `${col}${rowNum}`;
+  for (const m of sheetXml.matchAll(/<mergeCell ref="([A-Z]+)(\d+):([A-Z]+)(\d+)"/g)) {
+    if (`${m[1]}${m[2]}` === ref) return { colStart: m[1], colEnd: m[3] };
+  }
+  return { colStart: col, colEnd: col };
+}
+
+function getColWidthFromSheet(sheetXml, colNum) {
+  for (const m of sheetXml.matchAll(/<col min="(\d+)" max="(\d+)"([^>]*)\/>/g)) {
+    const min = parseInt(m[1], 10);
+    const max = parseInt(m[2], 10);
+    if (colNum >= min && colNum <= max) {
+      const w = (m[3].match(/width="([\d.]+)"/) || [])[1];
+      return w ? parseFloat(w) : 8.43;
+    }
+  }
+  return 8.43;
+}
+
+function getMergedColWidth(sheetXml, colStart, colEnd) {
+  const start = colToNum(colStart);
+  const end = colToNum(colEnd);
+  let total = 0;
+  for (let c = start; c <= end; c++) total += getColWidthFromSheet(sheetXml, c);
+  return total;
+}
+
+function ensureWrapTextStyleIdx(stylesXml, baseStyleIdx) {
+  const xfsBlock = stylesXml.match(/<cellXfs[^>]*>([\s\S]*?)<\/cellXfs>/);
+  if (!xfsBlock) return { stylesXml, styleIdx: baseStyleIdx };
+
+  const xfs = [...xfsBlock[1].matchAll(/<xf ([^>]*?)(?:\/>|>[\s\S]*?<\/xf>)/g)];
+  const baseEntry = xfs[parseInt(baseStyleIdx, 10)];
+  if (!baseEntry) return { stylesXml, styleIdx: baseStyleIdx };
+
+  let attrs = baseEntry[1].trim();
+  if (!attrs.includes('applyAlignment')) attrs += ' applyAlignment="1"';
+  else attrs = attrs.replace('applyAlignment="0"', 'applyAlignment="1"');
+
+  const newXf = `<xf ${attrs}><alignment horizontal="left" vertical="center" wrapText="1"/></xf>`;
+  const count = parseInt((stylesXml.match(/<cellXfs count="(\d+)"/) || [])[1], 10);
+  const updated = stylesXml
+    .replace('</cellXfs>', `${newXf}</cellXfs>`)
+    .replace(/<cellXfs count="\d+"/, `<cellXfs count="${count + 1}"`);
+
+  return { stylesXml: updated, styleIdx: String(count) };
+}
+
+function estimateRowHeight(textLen, totalColWidth) {
+  const charsPerLine = Math.max(12, Math.floor(totalColWidth * 0.85));
+  const lines = Math.max(1, Math.ceil(textLen / charsPerLine));
+  return Math.min(120, Math.max(15, lines * 15));
+}
+
+function applyRowHeight(openTag, height) {
+  if (!height || height <= 15) return openTag;
+  let tag = openTag.replace(/\sht="[^"]*"/, '').replace(/\scustomHeight="[^"]*"/, '');
+  return tag.replace('<row ', `<row ht="${height}" customHeight="1" `);
+}
+
+function cellStyleAttr(cell, styleOverride) {
+  if (styleOverride[cell.col] !== undefined) {
+    return styleOverride[cell.col] ? ` s="${styleOverride[cell.col]}"` : '';
+  }
+  return cell.styleIdx ? ` s="${cell.styleIdx}"` : '';
+}
+
+function buildItemRow(templateXml, newRowNum, ssReplace, numericReplace, formulaReplace = {}, styleOverride = {}, rowHeight) {
   const cells = parseCells(templateXml);
   const openTagEnd = templateXml.indexOf('>') + 1;
-  const newOpenTag = templateXml.slice(0, openTagEnd).replace(/\br="(\d+)"/, `r="${newRowNum}"`);
+  let newOpenTag = templateXml.slice(0, openTagEnd).replace(/\br="(\d+)"/, `r="${newRowNum}"`);
+  newOpenTag = applyRowHeight(newOpenTag, rowHeight);
   const parts = [];
   let cursor = openTagEnd;
 
@@ -139,8 +258,10 @@ function buildItemRow(templateXml, newRowNum, ssReplace, numericReplace) {
     if (cell.start > cursor) parts.push(templateXml.slice(cursor, cell.start));
     cursor = cell.end;
     const newRef = cell.col + newRowNum;
-    const s = cell.styleIdx ? ` s="${cell.styleIdx}"` : '';
-    if (numericReplace[cell.col] !== undefined) {
+    const s = cellStyleAttr(cell, styleOverride);
+    if (formulaReplace[cell.col] !== undefined) {
+      parts.push(`<c r="${newRef}"${s}><f>${formulaReplace[cell.col]}</f></c>`);
+    } else if (numericReplace[cell.col] !== undefined) {
       parts.push(`<c r="${newRef}"${s}><v>${numericReplace[cell.col]}</v></c>`);
     } else if (ssReplace[cell.col] !== undefined) {
       parts.push(`<c r="${newRef}"${s} t="s"><v>${ssReplace[cell.col]}</v></c>`);
@@ -179,6 +300,95 @@ function shiftAllRowNums(xml, delta) {
   return out.join('');
 }
 
+function findPlaceholderCell(sheetXml, ssTexts, placeholder) {
+  for (const row of parseRows(sheetXml)) {
+    for (const cell of parseCells(row.xml)) {
+      let matched = false;
+      if (cell.type === 's' && cell.value !== '') {
+        const text = ssTexts[parseInt(cell.value, 10)];
+        if (text === placeholder) matched = true;
+      }
+      if (cell.fullXml.includes(placeholder)) matched = true;
+      if (matched) {
+        return { rowNum: row.rowNum, col: cell.col, styleIdx: cell.styleIdx || '' };
+      }
+    }
+  }
+  return null;
+}
+
+function shiftSummaryRow(origRow, tmplRowNum, numExtra) {
+  return origRow > tmplRowNum ? origRow + numExtra : origRow;
+}
+
+function upsertFormulaCellInRow(sheetXml, rowNum, col, formula, styleIdx) {
+  const rows = parseRows(sheetXml);
+  const row = rows.find((r) => r.rowNum === rowNum);
+  if (!row) return sheetXml;
+  const cells = parseCells(row.xml);
+  const existing = cells.find((c) => c.col === col);
+  const s = styleIdx ? ` s="${styleIdx}"` : '';
+  const newCell = `<c r="${col}${rowNum}"${s}><f>${formula}</f></c>`;
+  let newRowXml;
+  if (existing) {
+    newRowXml = row.xml.slice(0, existing.start) + newCell + row.xml.slice(existing.end);
+  } else {
+    const closeTag = row.xml.lastIndexOf('</row>');
+    newRowXml = row.xml.slice(0, closeTag) + newCell + row.xml.slice(closeTag);
+  }
+  return sheetXml.slice(0, row.start) + newRowXml + sheetXml.slice(row.end);
+}
+
+const FIELD_ALIASES = {
+  stt: ['{{stt}}', '{{STT}}'],
+  ten_san_pham: ['{{ten_san_pham}}', '{{TEN_SAN_PHAM}}'],
+  don_vi: ['{{don_vi}}', '{{DVT}}'],
+  so_luong: ['{{so_luong}}', '{{SL}}'],
+  gia_ban: ['{{gia_ban}}', '{{DON_GIA}}'],
+  thanh_tien: ['{{thanh_tien}}', '{{THANH_TIEN}}'],
+  thue_suat: ['{{thue_suat}}', '{{THUE_SUAT}}'],
+  so_bao_gia: ['{{so_bao_gia}}', '{{SO_BAO_GIA}}'],
+  ngay_bao_gia: ['{{ngay_bao_gia}}', '{{NGAY_BAO_GIA}}'],
+  ten_du_an: ['{{ten_du_an}}', '{{TEN_DU_AN}}'],
+  ten_cong_ty: ['{{ten_cong_ty}}', '{{TEN_CONG_TY}}', '{{TEN_KHACH_HANG}}'],
+  tong_truoc_vat: ['{{tong_truoc_vat}}', '{{TONG_TRUOC_VAT}}', '{{TONG_TRUOC_THUE}}'],
+  vat_10: ['{{VAT_10}}'],
+  vat_8: ['{{VAT_8}}'],
+  tong_thanh_toan: ['{{tong_thanh_toan}}', '{{TONG_THANH_TOAN}}', '{{TONG_TIEN}}'],
+};
+
+function findSsIndex(ssTexts, aliases) {
+  for (const ph of aliases) {
+    const idx = ssTexts.indexOf(ph);
+    if (idx !== -1) return idx;
+  }
+  return -1;
+}
+
+function resolveCol(phToCol, aliases, fallback) {
+  for (const ph of aliases) {
+    if (phToCol[ph]) return phToCol[ph];
+  }
+  return fallback;
+}
+
+function findPlaceholderCellAny(sheetXml, ssTexts, aliases) {
+  for (const ph of aliases) {
+    const loc = findPlaceholderCell(sheetXml, ssTexts, ph);
+    if (loc) return loc;
+  }
+  return null;
+}
+
+function buildPlaceholderMap(values) {
+  const map = {};
+  for (const [field, aliases] of Object.entries(FIELD_ALIASES)) {
+    if (values[field] === undefined) continue;
+    for (const ph of aliases) map[ph] = values[field];
+  }
+  return map;
+}
+
 function shiftMerges(xml, afterRow, delta) {
   if (delta <= 0) return xml;
   return xml.replace(
@@ -189,24 +399,6 @@ function shiftMerges(xml, afterRow, delta) {
       return `<mergeCell ref="${c1}${r1 > afterRow ? r1 + delta : r1}:${c2}${r2 > afterRow ? r2 + delta : r2}"/>`;
     },
   );
-}
-
-function upsertSsCellInRow(sheetXml, rowNum, col, ssIdx, styleIdx) {
-  const rows = parseRows(sheetXml);
-  const row = rows.find((r) => r.rowNum === rowNum);
-  if (!row) return sheetXml;
-  const cells = parseCells(row.xml);
-  const existing = cells.find((c) => c.col === col);
-  const s = styleIdx ? ` s="${styleIdx}"` : '';
-  const newCell = `<c r="${col}${rowNum}"${s} t="s"><v>${ssIdx}</v></c>`;
-  let newRowXml;
-  if (existing) {
-    newRowXml = row.xml.slice(0, existing.start) + newCell + row.xml.slice(existing.end);
-  } else {
-    const closeTag = row.xml.lastIndexOf('</row>');
-    newRowXml = row.xml.slice(0, closeTag) + newCell + row.xml.slice(closeTag);
-  }
-  return sheetXml.slice(0, row.start) + newRowXml + sheetXml.slice(row.end);
 }
 
 async function loadTemplateBuffer(mauKey) {
@@ -259,13 +451,6 @@ export async function generateBaoGiaExcel(baoGiaId, mauKey) {
     return { ...item, _gia_xuat: giaCoBan };
   });
 
-  const tongTruocVAT = itemsWithGiaBan.reduce((s, i) => s + Number(i.so_luong) * i._gia_xuat, 0);
-  const vat10 = itemsWithGiaBan.filter((i) => Number(i.thue_suat) === 10)
-    .reduce((s, i) => s + Number(i.so_luong) * i._gia_xuat * 0.1, 0);
-  const vat8 = itemsWithGiaBan.filter((i) => Number(i.thue_suat) === 8)
-    .reduce((s, i) => s + Number(i.so_luong) * i._gia_xuat * 0.08, 0);
-  const tongThanhToan = tongTruocVAT + vat10 + vat8 + (cheDoVC === 0 ? phiVC : 0);
-
   const zip = await JSZip.loadAsync(templateBuffer);
   const sheetKeys = Object.keys(zip.files).filter((k) => /xl\/worksheets\/sheet\d+\.xml$/.test(k));
   if (!sheetKeys.length) throw new Error('Không tìm thấy sheet XML');
@@ -273,10 +458,13 @@ export async function generateBaoGiaExcel(baoGiaId, mauKey) {
   const ssFile = zip.file('xl/sharedStrings.xml');
   if (!ssFile) throw new Error('Không tìm thấy sharedStrings.xml');
 
-  const [ssXmlOrig, sheetXmlOrig] = await Promise.all([
+  const stylesFile = zip.file('xl/styles.xml');
+  const [ssXmlOrig, sheetXmlOrig, stylesXmlOrig] = await Promise.all([
     ssFile.async('string'),
     zip.file(sheetKeys[0]).async('string'),
+    stylesFile ? stylesFile.async('string') : Promise.resolve(''),
   ]);
+  const stylesLookup = parseStylesLookup(stylesXmlOrig);
 
   const ssTexts = parseSharedStrings(ssXmlOrig);
   const newSsTexts = [...ssTexts];
@@ -286,27 +474,25 @@ export async function generateBaoGiaExcel(baoGiaId, mauKey) {
     return i;
   };
 
-  const headerMap = {
-    '{{so_bao_gia}}': bgData.so_bao_gia || '',
-    '{{ngay_bao_gia}}': fmtDate(bgData.ngay_bao_gia),
-    '{{ten_du_an}}': bgData.ten_du_an || '',
-    '{{ten_cong_ty}}': bgData.ten_cong_ty || bgData.ten_khach_hang || '',
-    '{{tong_truoc_vat}}': '',
-    '{{tong_thanh_toan}}': '',
-    '{{VAT_10}}': fmtNum(vat10),
-    '{{VAT_8}}': fmtNum(vat8),
-  };
-  for (let i = 0; i < newSsTexts.length; i++) {
-    if (headerMap[newSsTexts[i]] !== undefined) newSsTexts[i] = headerMap[newSsTexts[i]];
-  }
+  const placeholderMap = buildPlaceholderMap({
+    so_bao_gia: bgData.so_bao_gia || '',
+    ngay_bao_gia: fmtDate(bgData.ngay_bao_gia),
+    ten_du_an: bgData.ten_du_an || '',
+    ten_cong_ty: bgData.ten_cong_ty || bgData.ten_khach_hang || '',
+  });
 
-  const sttSsIdx = ssTexts.indexOf('{{stt}}');
+  const sttSsIdx = findSsIndex(ssTexts, FIELD_ALIASES.stt);
   const allRows = parseRows(sheetXmlOrig);
 
   let templateRow = sttSsIdx !== -1
     ? allRows.find((row) => parseCells(row.xml).some((c) => c.type === 's' && parseInt(c.value, 10) === sttSsIdx))
     : undefined;
-  if (!templateRow) templateRow = allRows.find((row) => row.xml.includes('{{stt}}'));
+  if (!templateRow) {
+    for (const ph of FIELD_ALIASES.stt) {
+      templateRow = allRows.find((row) => row.xml.includes(ph));
+      if (templateRow) break;
+    }
+  }
   if (!templateRow) throw new Error('Không tìm thấy dòng template chứa {{stt}} trong file mẫu');
 
   const phToCol = {};
@@ -332,35 +518,50 @@ export async function generateBaoGiaExcel(baoGiaId, mauKey) {
     }
   }
 
-  const COL_STT = phToCol['{{stt}}'] || 'A';
-  const COL_TEN = phToCol['{{ten_san_pham}}'] || 'B';
-  const COL_DVT = phToCol['{{don_vi}}'] || 'C';
-  const COL_SL = phToCol['{{so_luong}}'] || 'F';
-  const COL_DON_GIA = phToCol['{{gia_ban}}'] || 'G';
-  const COL_THANH_TIEN = phToCol['{{thanh_tien}}'] || 'H';
-  const COL_THUE = phToCol['{{thue_suat}}'] || 'I';
+  const COL_STT = resolveCol(phToCol, FIELD_ALIASES.stt, 'A');
+  const COL_TEN = resolveCol(phToCol, FIELD_ALIASES.ten_san_pham, 'B');
+  const COL_DVT = resolveCol(phToCol, FIELD_ALIASES.don_vi, 'C');
+  const COL_SL = resolveCol(phToCol, FIELD_ALIASES.so_luong, 'F');
+  const COL_DON_GIA = resolveCol(phToCol, FIELD_ALIASES.gia_ban, 'G');
+  const COL_THANH_TIEN = resolveCol(phToCol, FIELD_ALIASES.thanh_tien, 'H');
+  const COL_THUE = resolveCol(phToCol, FIELD_ALIASES.thue_suat, 'I');
+
+  const templateCells = parseCells(templateRow.xml);
+  const tenTemplateStyle = templateCells.find((c) => c.col === COL_TEN)?.styleIdx || '';
+  const wrapTenStyle = ensureWrapTextStyleIdx(stylesXmlOrig, tenTemplateStyle);
+  let stylesXmlOut = wrapTenStyle.stylesXml;
+
+  const thueStyleOverride = {
+    [COL_THUE]: resolveThueStyleIdx(templateCells, COL_THUE, stylesLookup),
+    [COL_TEN]: wrapTenStyle.styleIdx,
+  };
 
   const tmplRowNum = templateRow.rowNum;
+  const mergeSpan = getMergeSpanForCol(sheetXmlOrig, COL_TEN, tmplRowNum);
+  const tenColWidth = getMergedColWidth(sheetXmlOrig, mergeSpan.colStart, mergeSpan.colEnd);
   const numItems = items.length;
   const numExtra = numItems - 1;
 
   const itemRowXmls = [];
   for (let i = 0; i < numItems; i++) {
     const item = itemsWithGiaBan[i];
+    const rowNum = tmplRowNum + i;
     const soLuong = Number(item.so_luong) || 0;
     const giaBan = item._gia_xuat;
-    const thanhTien = soLuong * giaBan;
     const thueSuat = Number(item.thue_suat) || 0;
-    itemRowXmls.push(buildItemRow(templateRow.xml, tmplRowNum + i, {
+    const tenText = item.ten_san_pham || '';
+    const rowHeight = estimateRowHeight(tenText.length, tenColWidth);
+    itemRowXmls.push(buildItemRow(templateRow.xml, rowNum, {
       [COL_STT]: addSs(String(i + 1)),
-      [COL_TEN]: addSs(item.ten_san_pham || ''),
+      [COL_TEN]: addSs(tenText),
       [COL_DVT]: addSs(item.don_vi || ''),
-      [COL_THUE]: addSs(`${thueSuat}%`),
     }, {
       [COL_SL]: soLuong,
       [COL_DON_GIA]: giaBan,
-      [COL_THANH_TIEN]: thanhTien,
-    }));
+      [COL_THUE]: thueSuat / 100,
+    }, {
+      [COL_THANH_TIEN]: `${COL_SL}${rowNum}*${COL_DON_GIA}${rowNum}`,
+    }, thueStyleOverride, rowHeight));
   }
 
   const before = sheetXmlOrig.slice(0, templateRow.start);
@@ -393,13 +594,61 @@ export async function generateBaoGiaExcel(baoGiaId, mauKey) {
     }
   }
 
-  const summaryStyle = '40';
-  const row12 = tmplRowNum + numItems;
-  const row15 = tmplRowNum + numItems + 3;
-  combined = upsertSsCellInRow(combined, row12, 'G', addSs(fmtNum(tongTruocVAT)), summaryStyle);
-  combined = upsertSsCellInRow(combined, row15, 'G', addSs(fmtNum(tongThanhToan)), summaryStyle);
+  for (let i = 0; i < newSsTexts.length; i++) {
+    if (placeholderMap[newSsTexts[i]] !== undefined) newSsTexts[i] = placeholderMap[newSsTexts[i]];
+  }
+
+  if (numItems > 0) {
+    const firstItemRow = tmplRowNum;
+    const lastItemRow = tmplRowNum + numItems - 1;
+    const thanhTienRange = `${COL_THANH_TIEN}${firstItemRow}:${COL_THANH_TIEN}${lastItemRow}`;
+    const thueRange = `${COL_THUE}${firstItemRow}:${COL_THUE}${lastItemRow}`;
+
+    const locTongTruoc = findPlaceholderCellAny(sheetXmlOrig, ssTexts, FIELD_ALIASES.tong_truoc_vat);
+    const locVat10 = findPlaceholderCellAny(sheetXmlOrig, ssTexts, FIELD_ALIASES.vat_10);
+    const locVat8 = findPlaceholderCellAny(sheetXmlOrig, ssTexts, FIELD_ALIASES.vat_8);
+    const locTongThanhToan = findPlaceholderCellAny(sheetXmlOrig, ssTexts, FIELD_ALIASES.tong_thanh_toan);
+
+    const summaryFormulas = [];
+    if (locTongTruoc) {
+      summaryFormulas.push([
+        locTongTruoc,
+        `SUM(${thanhTienRange})`,
+      ]);
+    }
+    if (locVat10) {
+      summaryFormulas.push([
+        locVat10,
+        `SUMIF(${thueRange},0.1,${thanhTienRange})*0.1`,
+      ]);
+    }
+    if (locVat8) {
+      summaryFormulas.push([
+        locVat8,
+        `SUMIF(${thueRange},0.08,${thanhTienRange})*0.08`,
+      ]);
+    }
+    if (locTongThanhToan && locTongTruoc && locVat10 && locVat8) {
+      const rowTong = shiftSummaryRow(locTongTruoc.rowNum, tmplRowNum, numExtra);
+      const rowV10 = shiftSummaryRow(locVat10.rowNum, tmplRowNum, numExtra);
+      const rowV8 = shiftSummaryRow(locVat8.rowNum, tmplRowNum, numExtra);
+      const tongParts = [
+        `${locTongTruoc.col}${rowTong}`,
+        `${locVat10.col}${rowV10}`,
+        `${locVat8.col}${rowV8}`,
+      ];
+      if (cheDoVC === 0 && phiVC > 0) tongParts.push(String(phiVC));
+      summaryFormulas.push([locTongThanhToan, tongParts.join('+')]);
+    }
+
+    for (const [loc, formula] of summaryFormulas) {
+      const targetRow = shiftSummaryRow(loc.rowNum, tmplRowNum, numExtra);
+      combined = upsertFormulaCellInRow(combined, targetRow, loc.col, formula, loc.styleIdx);
+    }
+  }
 
   zip.file('xl/sharedStrings.xml', rebuildSharedStrings(ssXmlOrig, newSsTexts));
+  if (stylesFile) zip.file('xl/styles.xml', stylesXmlOut);
   zip.file(sheetKeys[0], combined);
 
   const outBuffer = Buffer.from(await zip.generateAsync({

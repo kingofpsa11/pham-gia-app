@@ -1,8 +1,20 @@
 import { query } from '../db.js';
 
-const USER_TABLE_CANDIDATES = ['Admin', 'users', 'nguoi_dung', 'tai_khoan_he_thong'];
+export const USER_TABLE_CANDIDATES = ['nguoi_dung', 'Admin', 'users', 'tai_khoan_he_thong'];
 
 export async function findUserTable() {
+  const forced = process.env.USER_TABLE?.trim();
+  if (forced) {
+    const rows = await query(
+      `SELECT TABLE_NAME AS name
+       FROM information_schema.tables
+       WHERE table_schema = DATABASE() AND TABLE_NAME = ?
+       LIMIT 1`,
+      [forced],
+    );
+    if (rows[0]) return forced;
+  }
+
   const rows = await query(
     `SELECT TABLE_NAME AS name
      FROM information_schema.tables

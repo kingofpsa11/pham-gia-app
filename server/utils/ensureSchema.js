@@ -337,4 +337,80 @@ export async function ensureSchema() {
     }
     await query(`INSERT INTO app_schema_patches (patch_key) VALUES ('hop_dong_tam_ung_v1')`);
   }
+
+  const phuLucPatch = await queryOne(
+    `SELECT patch_key FROM app_schema_patches WHERE patch_key = 'phu_luc_hop_dong_v1'`,
+  );
+  if (!phuLucPatch) {
+    await query(
+      `CREATE TABLE IF NOT EXISTS phu_luc_hop_dong (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        hop_dong_id INT NOT NULL,
+        so_phu_luc VARCHAR(20) NOT NULL,
+        ngay_ky DATE NULL,
+        tieu_de VARCHAR(255) NOT NULL DEFAULT '',
+        ly_do TEXT,
+        ghi_chu TEXT,
+        gia_tri_hd_truoc DECIMAL(18,2) NOT NULL DEFAULT 0,
+        gia_tri_phu_luc DECIMAL(18,2) NOT NULL DEFAULT 0,
+        gia_tri_hd_sau DECIMAL(18,2) NOT NULL DEFAULT 0,
+        nguoi_tao VARCHAR(255) DEFAULT '',
+        tao_luc DATETIME DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_plhd_hop_dong (hop_dong_id),
+        UNIQUE KEY uk_plhd_so (hop_dong_id, so_phu_luc)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+    );
+    await query(
+      `CREATE TABLE IF NOT EXISTS phu_luc_hop_dong_chi_tiet (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        phu_luc_id INT NOT NULL,
+        hop_dong_chi_tiet_id INT NULL,
+        loai VARCHAR(20) NOT NULL DEFAULT 'tang',
+        ten_san_pham VARCHAR(500) NOT NULL DEFAULT '',
+        don_vi VARCHAR(50) DEFAULT '',
+        so_luong_cu DECIMAL(18,4) NOT NULL DEFAULT 0,
+        so_luong_thay_doi DECIMAL(18,4) NOT NULL DEFAULT 0,
+        so_luong_moi DECIMAL(18,4) NOT NULL DEFAULT 0,
+        don_gia_von DECIMAL(18,2) NOT NULL DEFAULT 0,
+        gia_ban_thuc_te DECIMAL(18,2) NOT NULL DEFAULT 0,
+        thue_suat DECIMAL(8,2) NOT NULL DEFAULT 10,
+        chenh_lech_phan_tram DECIMAL(8,2) NOT NULL DEFAULT 0,
+        gia_hop_dong DECIMAL(18,2) NOT NULL DEFAULT 0,
+        INDEX idx_plhdct_pl (phu_luc_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+    );
+    await query(`INSERT INTO app_schema_patches (patch_key) VALUES ('phu_luc_hop_dong_v1')`);
+    console.log('Schema: created phu_luc_hop_dong tables');
+  }
+
+  const hdDrivePatch = await queryOne(
+    `SELECT patch_key FROM app_schema_patches WHERE patch_key = 'hop_dong_drive_folder_v1'`,
+  );
+  if (!hdDrivePatch) {
+    const tenCol = await queryOne(
+      `SELECT COLUMN_NAME AS name FROM information_schema.columns
+       WHERE table_schema = DATABASE() AND table_name = 'hop_dong' AND COLUMN_NAME = 'ten_folder_du_an'`,
+    );
+    if (!tenCol) {
+      await query(
+        `ALTER TABLE hop_dong
+         ADD COLUMN ten_folder_du_an VARCHAR(255) NOT NULL DEFAULT ''
+         AFTER file_hop_dong_id`,
+      );
+      console.log('Schema: added hop_dong.ten_folder_du_an');
+    }
+    const idCol = await queryOne(
+      `SELECT COLUMN_NAME AS name FROM information_schema.columns
+       WHERE table_schema = DATABASE() AND table_name = 'hop_dong' AND COLUMN_NAME = 'id_folder_du_an'`,
+    );
+    if (!idCol) {
+      await query(
+        `ALTER TABLE hop_dong
+         ADD COLUMN id_folder_du_an VARCHAR(128) NOT NULL DEFAULT ''
+         AFTER ten_folder_du_an`,
+      );
+      console.log('Schema: added hop_dong.id_folder_du_an');
+    }
+    await query(`INSERT INTO app_schema_patches (patch_key) VALUES ('hop_dong_drive_folder_v1')`);
+  }
 }

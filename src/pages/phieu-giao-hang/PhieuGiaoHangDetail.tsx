@@ -23,6 +23,7 @@ import {
   Truck,
   CreditCard,
   X,
+  FileSpreadsheet,
 } from 'lucide-react';
 import type {
   PhieuGiaoHang,
@@ -125,6 +126,15 @@ export default function PhieuGiaoHangDetail() {
   const [khachHangList, setKhachHangList] = useState<KhachHang[]>([]);
   const [hopDongList, setHopDongList] = useState<HopDong[]>([]);
   const [filteredHopDongList, setFilteredHopDongList] = useState<HopDong[]>([]);
+  const [bbbgOpen, setBbbgOpen] = useState(false);
+  const [exportingBbbg, setExportingBbbg] = useState(false);
+  const [bbbgForm, setBbbgForm] = useState({
+    so_bbbg: '',
+    nguoi_giao: 'Phạm Mạnh Hà',
+    chuc_vu_giao: '',
+    nguoi_nhan: '',
+    chuc_vu_nhan: '',
+  });
 
   useEffect(() => {
     if (id) fetchPhieuGiao();
@@ -301,6 +311,65 @@ export default function PhieuGiaoHangDetail() {
     }
   }
 
+  function openBbbgModal() {
+    if (!phieuGiao) return;
+    const year = phieuGiao.ngay_giao
+      ? new Date(phieuGiao.ngay_giao).getFullYear()
+      : new Date().getFullYear();
+    setBbbgForm({
+      so_bbbg: phieuGiao.so_phieu ? `${phieuGiao.so_phieu}/${year}` : ` /${year}`,
+      nguoi_giao: 'Phạm Mạnh Hà',
+      chuc_vu_giao: '',
+      nguoi_nhan: phieuGiao.khach_hang?.nguoi_dai_dien || '',
+      chuc_vu_nhan: phieuGiao.khach_hang?.chuc_vu || '',
+    });
+    setBbbgOpen(true);
+  }
+
+  async function handleExportBbbg() {
+    if (!phieuGiao) return;
+    setExportingBbbg(true);
+    try {
+      const token = localStorage.getItem('token');
+      const resp = await fetch('/api/xuat-bbbg-excel', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({
+          phieu_giao_hang_id: phieuGiao.id,
+          so_bbbg: bbbgForm.so_bbbg.trim() || undefined,
+          nguoi_giao: bbbgForm.nguoi_giao.trim() || undefined,
+          chuc_vu_giao: bbbgForm.chuc_vu_giao.trim() || undefined,
+          nguoi_nhan: bbbgForm.nguoi_nhan.trim() || undefined,
+          chuc_vu_nhan: bbbgForm.chuc_vu_nhan.trim() || undefined,
+        }),
+      });
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({ error: 'Lỗi không xác định' }));
+        throw new Error(err.message || err.error || 'Xuất BBBG thất bại');
+      }
+      const blob = await resp.blob();
+      const cd = resp.headers.get('Content-Disposition') || '';
+      const match = cd.match(/filename="([^"]+)"/);
+      const fileName = match?.[1] || `BBBG_${phieuGiao.so_phieu || phieuGiao.id}.xlsx`;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileName;
+      a.click();
+      URL.revokeObjectURL(url);
+      addToast('success', 'Xuất biên bản bàn giao thành công');
+      setBbbgOpen(false);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Không thể xuất biên bản bàn giao';
+      addToast('error', message);
+    } finally {
+      setExportingBbbg(false);
+    }
+  }
+
   function formatFileSize(bytes?: number | null): string {
     if (!bytes) return '--';
     if (bytes < 1024) return `${bytes} B`;
@@ -379,9 +448,19 @@ export default function PhieuGiaoHangDetail() {
           <h1 className="text-2xl font-bold text-gray-900 truncate">{phieuGiao.so_phieu}</h1>
           <p className="mt-0.5 text-sm text-gray-500 truncate">{phieuGiao.khach_hang?.ten_cong_ty || ''}</p>
         </div>
-        <button onClick={openEditModal} className="btn-primary flex items-center gap-2">
-          <Pencil className="w-4 h-4" /> Chỉnh sửa
-        </button>
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            onClick={openBbbgModal}
+            disabled={chiTiet.length === 0}
+            title={chiTiet.length === 0 ? 'Chưa có dòng hàng để xuất BBBG' : 'Xuất biên bản bàn giao Excel'}
+            className="btn-secondary flex items-center gap-2"
+          >
+            <FileSpreadsheet className="w-4 h-4" /> Xuất BBBG
+          </button>
+          <button onClick={openEditModal} className="btn-primary flex items-center gap-2">
+            <Pencil className="w-4 h-4" /> Chỉnh sửa
+          </button>
+        </div>
       </div>
 
       {/* Thong tin phieu */}
@@ -735,6 +814,82 @@ export default function PhieuGiaoHangDetail() {
             </div>
           </div>
 
+        </div>
+      </Modal>
+
+      <Modal
+        open={bbbgOpen}
+        onOpenChange={(o) => { if (!exportingBbbg) setBbbgOpen(o); }}
+        title="Xuất biên bản bàn giao"
+        footer={
+          <>
+            <button
+              type="button"
+              className="btn-secondary"
+              disabled={exportingBbbg}
+              onClick={() => setBbbgOpen(false)}
+            >
+              Hủy
+            </button>
+            <button
+              type="button"
+              className="btn-primary flex items-center gap-2"
+              disabled={exportingBbbg}
+              onClick={handleExportBbbg}
+            >
+              <FileSpreadsheet className="w-4 h-4" />
+              {exportingBbbg ? 'Đang xuất...' : 'Xuất Excel'}
+            </button>
+          </>
+        }
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-gray-600">
+            Điền thông tin người giao / nhận rồi xuất file Excel theo mẫu BBBG.
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="sm:col-span-2">
+              <label className="block text-sm font-medium text-gray-700 mb-1">Số BBBG</label>
+              <input
+                className="input-field w-full"
+                value={bbbgForm.so_bbbg}
+                onChange={(e) => setBbbgForm((f) => ({ ...f, so_bbbg: e.target.value }))}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Người giao hàng</label>
+              <input
+                className="input-field w-full"
+                value={bbbgForm.nguoi_giao}
+                onChange={(e) => setBbbgForm((f) => ({ ...f, nguoi_giao: e.target.value }))}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Chức vụ bên giao</label>
+              <input
+                className="input-field w-full"
+                value={bbbgForm.chuc_vu_giao}
+                onChange={(e) => setBbbgForm((f) => ({ ...f, chuc_vu_giao: e.target.value }))}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Người nhận hàng</label>
+              <input
+                className="input-field w-full"
+                value={bbbgForm.nguoi_nhan}
+                onChange={(e) => setBbbgForm((f) => ({ ...f, nguoi_nhan: e.target.value }))}
+                placeholder="Để trống nếu ký tay"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Chức vụ bên nhận</label>
+              <input
+                className="input-field w-full"
+                value={bbbgForm.chuc_vu_nhan}
+                onChange={(e) => setBbbgForm((f) => ({ ...f, chuc_vu_nhan: e.target.value }))}
+              />
+            </div>
+          </div>
         </div>
       </Modal>
     </div>

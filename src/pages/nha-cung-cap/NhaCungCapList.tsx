@@ -127,33 +127,8 @@ export default function NhaCungCapList() {
   // ─── Fetch aggregate data (so HD mua, tong gia tri, tong da thanh toan) ──
   async function fetchAggregates(nccIds: number[]) {
     try {
-      // Fetch hop_dong_mua for each nha_cung_cap using nhaCungCapApi.hopDongMua
-      const aggMap: Record<number, { so_hoa_don_mua: number; tong_gia_tri_hoa_don_mua: number; tong_da_thanh_toan: number }> = {};
-
-      for (const id of nccIds) {
-        aggMap[id] = { so_hoa_don_mua: 0, tong_gia_tri_hoa_don_mua: 0, tong_da_thanh_toan: 0 };
-      }
-
-      // Fetch all hop_dong_mua and dong_tien for these nccIds
-      const hdmPromises = nccIds.map((id) => nhaCungCapApi.hopDongMua(id));
-      const dtPromises = nccIds.map((id) => dongTienApi.list({ nha_cung_cap_id: String(id), limit: 99999 }));
-
-      const [hdmResults, dtResults] = await Promise.all([
-        Promise.all(hdmPromises),
-        Promise.all(dtPromises),
-      ]);
-
-      for (let i = 0; i < nccIds.length; i++) {
-        const nccId = nccIds[i];
-        const hdmData = hdmResults[i].data || [];
-        aggMap[nccId].so_hoa_don_mua = hdmData.length;
-        aggMap[nccId].tong_gia_tri_hoa_don_mua = hdmData.reduce((sum, r) => sum + (r.tong_gia_tri || 0), 0);
-
-        const dtData = dtResults[i].data || [];
-        aggMap[nccId].tong_da_thanh_toan = dtData.reduce((sum, r) => sum + (r.ghi_co || 0), 0);
-      }
-
-      setAggregates((prev) => ({ ...prev, ...aggMap }));
+      const { data } = await nhaCungCapApi.aggregates(nccIds);
+      setAggregates((prev) => ({ ...prev, ...data }));
     } catch (err) {
       console.error('Lỗi tải thống kê nhà cung cấp:', err);
     }
@@ -286,7 +261,7 @@ export default function NhaCungCapList() {
       if (latest && latest.length > 0 && latest[0].so_du != null) {
         currentSoDu = latest[0].so_du;
       } else {
-        const { data: allRows } = await dongTienApi.list({ tai_khoan_id: String(taiKhoanId), limit: 99999 });
+        const { data: allRows } = await dongTienApi.list({ tai_khoan_id: String(taiKhoanId), limit: 500 });
         if (allRows) {
           currentSoDu = allRows.reduce((acc, r) => acc + (r.ghi_no || 0) - (r.ghi_co || 0), 0);
         }
@@ -332,7 +307,7 @@ export default function NhaCungCapList() {
       const [hdmRes, hdnRes, dtRes] = await Promise.all([
         nhaCungCapApi.hopDongMua(nccId),
         nhaCungCapApi.hoaDonNhap(nccId),
-        dongTienApi.list({ nha_cung_cap_id: String(nccId), limit: 99999 }),
+        dongTienApi.list({ nha_cung_cap_id: String(nccId), limit: 500 }),
       ]);
 
       setExpandedData({

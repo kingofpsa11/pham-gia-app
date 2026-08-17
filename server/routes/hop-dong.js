@@ -8,8 +8,12 @@ import {
   messageHopDongTrung,
 } from '../utils/soTrungNam.js';
 import { calcTongThanhToanHopDong } from '../utils/baoGiaCalc.js';
+import { nextSoHopDongBan } from '../utils/soChungTu.js';
+import { optionalAuth } from '../middleware/auth.js';
+import { ensureHopDongDriveFolders } from '../utils/hopDongDrive.js';
 
 const router = Router();
+router.use(optionalAuth);
 
 function insertId(result) {
   return Number(result?.insertId ?? result?.[0]?.insertId);
@@ -36,6 +40,34 @@ async function loadHopDongJoined(id) {
   return queryOne(`${HD_JOIN_SELECT} WHERE hd.id = ?`, [id]);
 }
 
+async function attachDriveFolders(req, hopDongId) {
+  try {
+    const row = await loadHopDongJoined(hopDongId);
+    if (!row) return { data: null };
+    const drive = await ensureHopDongDriveFolders({
+      userId: req.user?.id,
+      hopDong: row,
+      tenKhachHang: row.ten_cong_ty || '',
+    });
+    if (drive?.id_folder) {
+      await query(
+        'UPDATE hop_dong SET ten_folder_du_an = ?, id_folder_du_an = ? WHERE id = ?',
+        [drive.ten_folder || '', drive.id_folder, hopDongId],
+      );
+      row.ten_folder_du_an = drive.ten_folder || '';
+      row.id_folder_du_an = drive.id_folder;
+    }
+    return { data: shapeHopDong(row), drive, warning: drive?.warning || null };
+  } catch (err) {
+    console.error('attachDriveFolders:', err.message || err);
+    const row = await loadHopDongJoined(hopDongId);
+    return {
+      data: row ? shapeHopDong(row) : null,
+      warning: err.message || 'Không tạo được thư mục Google Drive',
+    };
+  }
+}
+
 function mergeHopDongUpdate(existing, body) {
   return {
     khach_hang_id: body.khach_hang_id ?? existing.khach_hang_id,
@@ -43,6 +75,7 @@ function mergeHopDongUpdate(existing, body) {
     so_hop_dong: body.so_hop_dong ?? existing.so_hop_dong,
     ngay_hop_dong: body.ngay_hop_dong ?? existing.ngay_hop_dong,
     file_hop_dong_id: body.file_hop_dong_id !== undefined ? (body.file_hop_dong_id || '') : (existing.file_hop_dong_id || ''),
+    ten_folder_du_an: body.ten_folder_du_an !== undefined ? (body.ten_folder_du_an || '') : (existing.ten_folder_du_an || ''),
     mo_ta_noi_dung: body.mo_ta_noi_dung !== undefined ? (body.mo_ta_noi_dung || '') : (existing.mo_ta_noi_dung || ''),
     trang_thai: body.trang_thai ?? existing.trang_thai ?? 'Hieu luc',
     phi_van_chuyen: body.phi_van_chuyen ?? existing.phi_van_chuyen ?? 0,
@@ -132,6 +165,16 @@ router.get('/hop-dong', async (req, res) => {
   }
 });
 
+router.get('/hop-dong/so-tiep-theo', async (req, res) => {
+  try {
+    const nam = parseInt(String(req.query.nam || ''), 10) || new Date().getFullYear();
+    const so = await nextSoHopDongBan(query, nam);
+    return res.json({ data: { so, nam } });
+  } catch (err) {
+    return dbErrorResponse(res, err, 'Không thể lấy số hợp đồng tiếp theo');
+  }
+});
+
 router.get('/hop-dong/kiem-tra-so', async (req, res) => {
   try {
     const so = String(req.query.so_hop_dong || req.query.so || '').trim();
@@ -179,19 +222,21 @@ router.post('/hop-dong', async (req, res) => {
   try {
     const body = req.body;
     const nam = parseNamFromDate(body.ngay_hop_dong);
-    const dup = await findHopDongTrungSo(queryOne, body.so_hop_dong, nam, null);
+    const soHopDong = String(body.so_hop_dong || '').trim() || (await nextSoHopDongBan(query, nam));
+    const dup = await findHopDongTrungSo(queryOne, soHopDong, nam, null);
     if (dup) {
-      return res.status(409).json({ error: messageHopDongTrung(String(body.so_hop_dong).trim(), nam) });
+      return res.status(409).json({ error: messageHopDongTrung(soHopDong, nam) });
     }
     const result = await query(
-      `INSERT INTO hop_dong (khach_hang_id, ten_du_an, so_hop_dong, ngay_hop_dong, file_hop_dong_id, mo_ta_noi_dung, trang_thai, phi_van_chuyen, che_do_van_chuyen, ty_le_tam_ung, gia_tri_tam_ung)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO hop_dong (khach_hang_id, ten_du_an, so_hop_dong, ngay_hop_dong, file_hop_dong_id, ten_folder_du_an, mo_ta_noi_dung, trang_thai, phi_van_chuyen, che_do_van_chuyen, ty_le_tam_ung, gia_tri_tam_ung)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         body.khach_hang_id,
         body.ten_du_an || '',
-        body.so_hop_dong,
+        soHopDong,
         body.ngay_hop_dong,
         body.file_hop_dong_id || '',
+        body.ten_folder_du_an || '',
         body.mo_ta_noi_dung || '',
         body.trang_thai || 'Hieu luc',
         body.phi_van_chuyen || 0,
@@ -223,7 +268,12 @@ router.post('/hop-dong', async (req, res) => {
     }
 
     const newRow = await queryOne('SELECT * FROM hop_dong WHERE id = ?', [hopDongId]);
-    return res.json({ data: newRow });
+    const attached = await attachDriveFolders(req, hopDongId);
+    return res.json({
+      data: attached.data || newRow,
+      drive: attached.drive || null,
+      drive_warning: attached.warning || null,
+    });
   } catch (err) {
     if (err?.code === 'ER_DUP_ENTRY' && String(err.message).includes('so_hop_dong')) {
       const nam = parseNamFromDate(req.body?.ngay_hop_dong);
@@ -249,13 +299,14 @@ router.put('/hop-dong/:id', async (req, res) => {
       return res.status(409).json({ error: messageHopDongTrung(String(merged.so_hop_dong).trim(), nam) });
     }
     await query(
-      `UPDATE hop_dong SET khach_hang_id=?, ten_du_an=?, so_hop_dong=?, ngay_hop_dong=?, file_hop_dong_id=?, mo_ta_noi_dung=?, trang_thai=?, phi_van_chuyen=?, che_do_van_chuyen=?, ty_le_tam_ung=?, gia_tri_tam_ung=? WHERE id=?`,
+      `UPDATE hop_dong SET khach_hang_id=?, ten_du_an=?, so_hop_dong=?, ngay_hop_dong=?, file_hop_dong_id=?, ten_folder_du_an=?, mo_ta_noi_dung=?, trang_thai=?, phi_van_chuyen=?, che_do_van_chuyen=?, ty_le_tam_ung=?, gia_tri_tam_ung=? WHERE id=?`,
       [
         merged.khach_hang_id,
         merged.ten_du_an,
         merged.so_hop_dong,
         merged.ngay_hop_dong,
         merged.file_hop_dong_id,
+        merged.ten_folder_du_an,
         merged.mo_ta_noi_dung,
         merged.trang_thai,
         merged.phi_van_chuyen,
@@ -287,9 +338,16 @@ router.put('/hop-dong/:id', async (req, res) => {
       }
     }
 
-    const updated = await loadHopDongJoined(id);
+    const attached = await attachDriveFolders(req, id);
     const chiTiet = await query('SELECT * FROM hop_dong_chi_tiet WHERE hop_dong_id = ?', [id]);
-    return res.json({ data: shapeHopDong(updated, chiTiet) });
+    const data = attached.data
+      ? { ...attached.data, chi_tiet: chiTiet }
+      : shapeHopDong(await loadHopDongJoined(id), chiTiet);
+    return res.json({
+      data,
+      drive: attached.drive || null,
+      drive_warning: attached.warning || null,
+    });
   } catch (err) {
     if (err?.code === 'ER_DUP_ENTRY' && String(err.message).includes('so_hop_dong')) {
       const nam = parseNamFromDate(req.body?.ngay_hop_dong);
@@ -298,6 +356,30 @@ router.put('/hop-dong/:id', async (req, res) => {
       });
     }
     return dbErrorResponse(res, err, 'Không thể cập nhật hợp đồng');
+  }
+});
+
+router.post('/hop-dong/:id/tao-folder', async (req, res) => {
+  try {
+    const id = req.params.id;
+    const existing = await queryOne('SELECT id FROM hop_dong WHERE id = ?', [id]);
+    if (!existing) return res.status(404).json({ error: 'Not found' });
+    const tenFolder = String(req.body?.ten_folder_du_an || '').trim();
+    if (tenFolder) {
+      await query('UPDATE hop_dong SET ten_folder_du_an = ? WHERE id = ?', [tenFolder, id]);
+    }
+    const attached = await attachDriveFolders(req, id);
+    if (!attached.data) return res.status(404).json({ error: 'Not found' });
+    if (attached.warning && !attached.drive?.id_folder) {
+      return res.status(400).json({ error: attached.warning, drive_warning: attached.warning });
+    }
+    return res.json({
+      data: attached.data,
+      drive: attached.drive || null,
+      drive_warning: attached.warning || null,
+    });
+  } catch (err) {
+    return dbErrorResponse(res, err, 'Không thể tạo thư mục Google Drive');
   }
 });
 

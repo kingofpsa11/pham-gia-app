@@ -71,12 +71,34 @@ router.get('/phieu-giao-hang-by', async (req, res) => {
       params
     );
 
+    if (!rows.length) return res.json({ data: [] });
+
+    const pghIds = rows.map((r) => r.id);
+    const hdIds = [...new Set(rows.map((r) => r.hop_dong_id).filter(Boolean))];
+
+    const placeholders = pghIds.map(() => '?').join(',');
+    const chiTietAll = await query(
+      `${CHI_TIET_SELECT} WHERE pghct.phieu_giao_hang_id IN (${placeholders}) ORDER BY pghct.id`,
+      pghIds
+    );
+
+    const chiTietByPgh = new Map();
+    for (const ct of chiTietAll) {
+      const key = ct.phieu_giao_hang_id;
+      if (!chiTietByPgh.has(key)) chiTietByPgh.set(key, []);
+      chiTietByPgh.get(key).push(ct);
+    }
+
+    const hdChiTietByHd = new Map();
+    await Promise.all(
+      hdIds.map(async (hdId) => {
+        hdChiTietByHd.set(hdId, await loadHopDongChiTietOrdered(hdId));
+      })
+    );
+
     for (const row of rows) {
-      const chiTietRaw = await query(
-        `${CHI_TIET_SELECT} WHERE pghct.phieu_giao_hang_id = ? ORDER BY pghct.id`,
-        [row.id],
-      );
-      const hdRows = await loadHopDongChiTietOrdered(row.hop_dong_id);
+      const chiTietRaw = chiTietByPgh.get(row.id) || [];
+      const hdRows = hdChiTietByHd.get(row.hop_dong_id) || [];
       row.chi_tiet = enrichPhieuChiTietRows(chiTietRaw, hdRows);
       row.gia_tri_ghi_no = calcTotalsFromPhieuChiTiet(row.chi_tiet).tongSauThue;
     }

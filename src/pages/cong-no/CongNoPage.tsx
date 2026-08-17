@@ -1,12 +1,12 @@
 import { useState, useEffect, useCallback } from 'react';
-import { dongTienApi, taiKhoanApi, khachHangApi, hopDongApi, phieuGiaoHangApi } from '../../lib/api';
+import { congNoApi, dongTienApi, taiKhoanApi, hopDongApi, phieuGiaoHangApi } from '../../lib/api';
 import { useToastStore } from '../../store/toast';
 import { formatVND, formatDate, formatNumber, getTodayInputValue } from '../../lib/utils';
 import Modal from '../../components/ui/Modal';
 import SearchInput from '../../components/ui/SearchInput';
 import EmptyState from '../../components/ui/EmptyState';
 import { Receipt, ArrowUpRight, ChevronDown, ChevronRight, Users } from 'lucide-react';
-import type { KhachHang, TaiKhoan, HopDong, PhieuGiaoHang, DongTien } from '../../types';
+import type { TaiKhoan, HopDong, PhieuGiaoHang, DongTien } from '../../types';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -69,13 +69,11 @@ export default function CongNoPage() {
 
   // Lookup lists
   const [taiKhoanList, setTaiKhoanList] = useState<TaiKhoan[]>([]);
-  const [khachHangList, setKhachHangList] = useState<KhachHang[]>([]);
   const [hopDongList, setHopDongList] = useState<HopDong[]>([]);
 
   // ─── Load lookup data ──────────────────────────────────────────────────────
   useEffect(() => {
     taiKhoanApi.list().then(({ data }) => { setTaiKhoanList(data as TaiKhoan[]); });
-    khachHangApi.list({ limit: 1000 }).then(({ data }) => { setKhachHangList(data as KhachHang[]); });
     hopDongApi.list({ limit: 1000 }).then(({ data }) => { setHopDongList(data as HopDong[]); });
   }, []);
 
@@ -83,82 +81,18 @@ export default function CongNoPage() {
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      // 1. Get all phieu_giao_hang with gia_tri_ghi_no grouped by khach_hang_id
-      const { data: phieuData } = await phieuGiaoHangApi.list({ limit: 99999 });
-
-      // 2. Get all dong_tien payments where khach_hang_id is not null
-      const { data: dongTienData } = await dongTienApi.list({ limit: 99999 });
-
-      // Filter to only those with khach_hang_id
-      const dongTienWithKh = dongTienData.filter((d) => d.khach_hang_id != null);
-
-      // 3. Calculate total cong no phai thu = total gia_tri_ghi_no - total ghi_no (where khach_hang_id not null)
-      const totalGhiNo = (phieuData || []).reduce((sum, p) => sum + (p.gia_tri_ghi_no || 0), 0);
-      const totalDaThanhToan = dongTienWithKh.reduce((sum, d) => sum + (d.ghi_no || 0), 0);
-      setTongCongNoPhaiThu(totalGhiNo - totalDaThanhToan);
-
-      // 4. Calculate total da thu thang nay
-      const now = new Date();
-      const startOfMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
-      const tongThangNay = dongTienWithKh
-        .filter((d) => d.ngay_gio_giao_dich && String(d.ngay_gio_giao_dich).slice(0, 10) >= startOfMonth)
-        .reduce((sum, d) => sum + (d.ghi_no || 0), 0);
-      setTongDaThuThangNay(tongThangNay);
-
-      // 5. Build customer debt map
-      // Group phieu_giao_hang by khach_hang_id
-      const phieuByKhachHang: Record<number, number> = {};
-      (phieuData || []).forEach((p) => {
-        if (p.khach_hang_id) {
-          phieuByKhachHang[p.khach_hang_id] = (phieuByKhachHang[p.khach_hang_id] || 0) + (p.gia_tri_ghi_no || 0);
-        }
-      });
-
-      // Group dong_tien by khach_hang_id
-      const thanhToanByKhachHang: Record<number, number> = {};
-      dongTienWithKh.forEach((d) => {
-        if (d.khach_hang_id) {
-          thanhToanByKhachHang[d.khach_hang_id] = (thanhToanByKhachHang[d.khach_hang_id] || 0) + (d.ghi_no || 0);
-        }
-      });
-
-      // Get all khach_hang ids that have phieu_giao_hang
-      const khachHangIdsWithPhieu = Object.keys(phieuByKhachHang).map(Number);
-
-      // Use khachHangList to look up names
-      if (khachHangIdsWithPhieu.length > 0) {
-        const relevantKhachHang = khachHangList.filter((kh) => khachHangIdsWithPhieu.includes(kh.id));
-
-        const debts: CustomerDebt[] = relevantKhachHang.map((kh) => {
-          const tongGhiNo = phieuByKhachHang[kh.id] || 0;
-          const daThanhToan = thanhToanByKhachHang[kh.id] || 0;
-          return {
-            khach_hang_id: kh.id,
-            ten_cong_ty: (kh as any).ten_cong_ty || kh.ten_cong_ty || '',
-            tong_gia_tri_ghi_no: tongGhiNo,
-            tong_da_thanh_toan: daThanhToan,
-            con_phai_thu: tongGhiNo - daThanhToan,
-          };
-        });
-
-        // Sort by con_phai_thu descending
-        debts.sort((a, b) => b.con_phai_thu - a.con_phai_thu);
-
-        // Count customers with outstanding debt
-        setSoKhachHangDangNo(debts.filter((d) => d.con_phai_thu > 0).length);
-
-        setCustomerDebts(debts);
-      } else {
-        setCustomerDebts([]);
-        setSoKhachHangDangNo(0);
-      }
+      const res = await congNoApi.list();
+      setTongCongNoPhaiThu(Number(res.tong_cong_no_phai_thu) || 0);
+      setSoKhachHangDangNo(Number(res.so_khach_hang_dang_no) || 0);
+      setTongDaThuThangNay(Number(res.tong_da_thu_thang_nay) || 0);
+      setCustomerDebts((res.data || []) as CustomerDebt[]);
     } catch (err) {
       console.error('Lỗi tải dữ liệu công nợ:', err);
       addToast('error', 'Không thể tải dữ liệu công nợ');
     } finally {
       setLoading(false);
     }
-  }, [addToast, khachHangList]);
+  }, [addToast]);
 
   useEffect(() => {
     fetchData();
@@ -197,8 +131,8 @@ export default function CongNoPage() {
 
     try {
       const [phieuRes, dongTienRes] = await Promise.all([
-        phieuGiaoHangApi.list({ khach_hang_id: String(khachHangId), limit: 99999 }),
-        dongTienApi.list({ khach_hang_id: String(khachHangId), limit: 99999 }),
+        phieuGiaoHangApi.list({ khach_hang_id: String(khachHangId), limit: 500 }),
+        dongTienApi.list({ khach_hang_id: String(khachHangId), limit: 500 }),
       ]);
 
       setPhieuGiaoHangDetails((phieuRes.data as PhieuGiaoHang[]) || []);
@@ -254,7 +188,7 @@ export default function CongNoPage() {
       if (latest && latest.length > 0 && latest[0].so_du != null) {
         currentSoDu = latest[0].so_du;
       } else {
-        const { data: allRows } = await dongTienApi.list({ tai_khoan_id: String(taiKhoanId), limit: 99999 });
+        const { data: allRows } = await dongTienApi.list({ tai_khoan_id: String(taiKhoanId), limit: 500 });
         if (allRows) {
           currentSoDu = allRows.reduce((acc, r) => acc + (r.ghi_no || 0) - (r.ghi_co || 0), 0);
         }
@@ -581,8 +515,8 @@ export default function CongNoPage() {
               className="select-field w-full"
             >
               <option value="">-- Chọn khách hàng --</option>
-              {khachHangList.map((kh) => (
-                <option key={kh.id} value={kh.id}>{kh.ten_cong_ty}</option>
+              {customerDebts.map((kh) => (
+                <option key={kh.khach_hang_id} value={kh.khach_hang_id}>{kh.ten_cong_ty}</option>
               ))}
             </select>
           </div>

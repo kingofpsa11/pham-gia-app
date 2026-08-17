@@ -14,6 +14,8 @@ import BaoGiaDetail from './pages/bao-gia/BaoGiaDetail';
 import HopDongList from './pages/hop-dong/HopDongList';
 import HopDongCreate from './pages/hop-dong/HopDongCreate';
 import HopDongDetail from './pages/hop-dong/HopDongDetail';
+import PhuLucCreate from './pages/hop-dong/PhuLucCreate';
+import PhuLucDetail from './pages/hop-dong/PhuLucDetail';
 import PhieuGiaoHangList from './pages/phieu-giao-hang/PhieuGiaoHangList';
 import PhieuGiaoHangDetail from './pages/phieu-giao-hang/PhieuGiaoHangDetail';
 import DongTienMoiList from './pages/dong-tien/DongTienMoiList';
@@ -69,6 +71,8 @@ function App() {
             <Route path="/bao-gia/:id" element={<BaoGiaDetail />} />
             <Route path="/hop-dong" element={<HopDongList />} />
             <Route path="/hop-dong/tao-moi" element={<HopDongCreate />} />
+            <Route path="/hop-dong/:id/phu-luc/tao-moi" element={<PhuLucCreate />} />
+            <Route path="/hop-dong/:id/phu-luc/:plId" element={<PhuLucDetail />} />
             <Route path="/hop-dong/:id" element={<HopDongDetail />} />
             <Route path="/phieu-giao-hang" element={<PhieuGiaoHangList />} />
             <Route path="/phieu-giao-hang/:id" element={<PhieuGiaoHangDetail />} />

@@ -790,19 +790,15 @@ export default function DongTienMoiList() {
       if (f.khach_hang_id) params.khach_hang_id = f.khach_hang_id;
       if (f.search.trim()) params.search = f.search.trim();
 
-      const { data: rows, total } = await dongTienMoiApi.list(params);
+      const { data: rows, total, tong_thu, tong_chi } = await dongTienMoiApi.list({
+        ...params,
+        summary: '1',
+      });
       setData(rows as DongTienMoi[]);
       setTotalCount(total);
-
-      // Summary: fetch all for current filters (no pagination)
-      const allParams = { ...params };
-      delete allParams.page;
-      delete allParams.limit;
-      allParams.limit = 99999;
-      const { data: allRows } = await dongTienMoiApi.list(allParams);
-      setAllFilteredRows(allRows);
-      setTongThu(allRows.reduce((s, r) => s + (r.loai_giao_dich === 'thu' ? Number(r.so_tien) : 0), 0));
-      setTongChi(allRows.reduce((s, r) => s + (r.loai_giao_dich === 'chi' ? Number(r.so_tien) : 0), 0));
+      setAllFilteredRows(rows as DongTienMoi[]);
+      setTongThu(Number(tong_thu) || 0);
+      setTongChi(Number(tong_chi) || 0);
     } catch (err) {
       console.error(err);
       addToast('error', 'Không thể tải danh sách dòng tiền');

@@ -106,18 +106,40 @@ router.get('/dong-tien-moi', async (req, res) => {
     }
 
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    const wantSummary = String(req.query.summary || '') === '1';
+
     const countRow = await queryOne(
       `SELECT COUNT(*) AS total FROM dong_tien_moi dt
        LEFT JOIN hang_muc_thu_chi hm ON hm.id = dt.hang_muc_thu_chi_id
        ${where}`,
       params
     );
+
+    let summary = null;
+    if (wantSummary) {
+      summary = await queryOne(
+        `SELECT
+           COALESCE(SUM(CASE WHEN dt.loai_giao_dich = 'thu' THEN dt.so_tien ELSE 0 END), 0) AS tong_thu,
+           COALESCE(SUM(CASE WHEN dt.loai_giao_dich = 'chi' THEN dt.so_tien ELSE 0 END), 0) AS tong_chi
+         FROM dong_tien_moi dt
+         LEFT JOIN hang_muc_thu_chi hm ON hm.id = dt.hang_muc_thu_chi_id
+         ${where}`,
+        params
+      );
+    }
+
     const rows = await query(
       `${LIST_SELECT} ${where}
        ORDER BY dt.ngay_giao_dich DESC, dt.id DESC ${sqlLimitOffset(limit, offset)}`,
       params
     );
-    return res.json({ data: rows, total: countRow?.total || 0, page, limit });
+
+    const payload = { data: rows, total: countRow?.total || 0, page, limit };
+    if (wantSummary) {
+      payload.tong_thu = Number(summary?.tong_thu) || 0;
+      payload.tong_chi = Number(summary?.tong_chi) || 0;
+    }
+    return res.json(payload);
   } catch (err) {
     return dbErrorResponse(res, err, 'Không thể tải dòng tiền');
   }

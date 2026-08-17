@@ -358,7 +358,7 @@ export default function PhanTichDongTienPage() {
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      const limit = 500;
+      const limit = 5000;
       let page = 1;
       const all: DongTienMoi[] = [];
       while (true) {

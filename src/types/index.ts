@@ -56,6 +56,8 @@ export interface HopDong {
   ty_le_tam_ung?: number;
   /** Giá trị tạm ứng (VND) */
   gia_tri_tam_ung?: number;
+  ten_folder_du_an?: string;
+  id_folder_du_an?: string;
   khach_hang?: KhachHang;
   chi_tiet?: HopDongChiTiet[];
 }
@@ -68,6 +70,42 @@ export interface HopDongChiTiet {
   so_luong: number;
   don_gia_von: number;
   lai_suat_phan_tram: number;
+  gia_ban_thuc_te: number;
+  thue_suat: number;
+  chenh_lech_phan_tram: number;
+  gia_hop_dong: number;
+}
+
+export interface PhuLucHopDong {
+  id: number;
+  hop_dong_id: number;
+  so_phu_luc: string;
+  ngay_ky?: string;
+  tieu_de?: string;
+  ly_do?: string;
+  ghi_chu?: string;
+  gia_tri_hd_truoc: number;
+  gia_tri_phu_luc: number;
+  gia_tri_hd_sau: number;
+  nguoi_tao?: string;
+  tao_luc?: string;
+  so_hop_dong?: string;
+  ten_du_an?: string;
+  ten_cong_ty?: string;
+  chi_tiet?: PhuLucHopDongChiTiet[];
+}
+
+export interface PhuLucHopDongChiTiet {
+  id?: number;
+  phu_luc_id?: number;
+  hop_dong_chi_tiet_id?: number | null;
+  loai: 'tang' | 'giam' | 'moi';
+  ten_san_pham: string;
+  don_vi: string;
+  so_luong_cu: number;
+  so_luong_thay_doi: number;
+  so_luong_moi: number;
+  don_gia_von: number;
   gia_ban_thuc_te: number;
   thue_suat: number;
   chenh_lech_phan_tram: number;

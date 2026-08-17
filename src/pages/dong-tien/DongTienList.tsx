@@ -348,7 +348,7 @@ export default function DongTienList() {
         if (f.loai_chi_phi_id) dauKyParams.loai_chi_phi_id = f.loai_chi_phi_id;
         if (f.chi_phi_id) dauKyParams.chi_phi_id = f.chi_phi_id;
         dauKyParams.date_to = f.dateFrom;
-        dauKyParams.limit = 99999;
+        dauKyParams.limit = 5000;
         const { data: dauKyRows } = await dongTienApi.list(dauKyParams);
         setSoDuDauKy(dauKyRows.reduce((acc, r) => acc + (r.ghi_no || 0) - (r.ghi_co || 0), 0));
       } else {

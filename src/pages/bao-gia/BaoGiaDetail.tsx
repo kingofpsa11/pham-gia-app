@@ -179,19 +179,21 @@ export default function BaoGiaDetail() {
         const err = await resp.json().catch(() => ({ error: 'Lỗi không xác định' }));
         throw new Error(err.message || err.error || 'Xuất Excel thất bại');
       }
+      const blob = await resp.blob();
+      const fileName = `${baoGia.so_bao_gia}.xlsx`;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileName;
+      a.click();
+      URL.revokeObjectURL(url);
+
       const link = resp.headers.get('X-Drive-Link');
       if (link) {
         setDriveLink(link);
-        window.open(link, '_blank');
-        addToast('success', 'Đã lưu vào Google Drive và mở file');
+        addToast('success', 'Đã tải file Excel (.xlsx) và lưu bản sao lên Google Drive');
       } else {
-        const blob = await resp.blob();
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `${baoGia.so_bao_gia}.xlsx`;
-        a.click();
-        URL.revokeObjectURL(url);
+        setDriveLink(null);
         addToast('success', 'Xuất file Excel thành công');
       }
     } catch (err: any) {

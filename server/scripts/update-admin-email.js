@@ -8,33 +8,7 @@ import { query } from '../db.js';
 
 dotenv.config();
 
-const USER_TABLE_CANDIDATES = ['Admin', 'users', 'nguoi_dung', 'tai_khoan_he_thong'];
-
-async function findUserTable() {
-  const rows = await query(
-    `SELECT TABLE_NAME AS name
-     FROM information_schema.tables
-     WHERE table_schema = DATABASE()
-       AND TABLE_NAME IN (?, ?, ?)`,
-    USER_TABLE_CANDIDATES,
-  );
-  const found = new Set(rows.map((r) => r.name));
-  return USER_TABLE_CANDIDATES.find((name) => found.has(name)) ?? null;
-}
-
-async function getUserColumns(tableName) {
-  const rows = await query(
-    `SELECT COLUMN_NAME AS name
-     FROM information_schema.columns
-     WHERE table_schema = DATABASE() AND table_name = ?`,
-    [tableName],
-  );
-  return new Set(rows.map((r) => r.name));
-}
-
-function pickColumn(columns, candidates) {
-  return candidates.find((name) => columns.has(name)) ?? null;
-}
+import { findUserTable, getUserColumns, pickColumn } from '../utils/userTable.js';
 
 const oldLogin = process.argv[2] || 'Admin';
 const newLogin = process.argv[3] || 'phamgia.co.info@gmail.com';
@@ -102,8 +76,9 @@ if (!target) {
 
 const sets = [`\`${loginCol}\` = ?`];
 const params = [newLogin];
-if (columns.has('updatedAt')) {
-  sets.push('`updatedAt` = NOW(3)');
+const updatedCol = pickColumn(columns, ['updatedAt', 'updated_at']);
+if (updatedCol) {
+  sets.push(`\`${updatedCol}\` = NOW(3)`);
 }
 params.push(target.id);
 

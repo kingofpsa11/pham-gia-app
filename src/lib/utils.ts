@@ -580,28 +580,41 @@ export function trangThaiHopDongColor(value: string): string {
   }
 }
 
-export function generateSoBaoGia(): string {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  const random = String(Math.floor(Math.random() * 1000)).padStart(3, '0');
-  return `BG${year}${month}${random}`;
+export function generateSoBaoGia(nam = new Date().getFullYear()): string {
+  return `01/BG/${nam}`;
 }
 
-export function generateSoHopDong(): string {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  const random = String(Math.floor(Math.random() * 1000)).padStart(3, '0');
-  return `HD${year}${month}${random}`;
+export function generateSoHopDong(nam = new Date().getFullYear()): string {
+  return `01/HĐMB/${nam}/PG-`;
 }
 
-export function generateSoPhieu(): string {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  const random = String(Math.floor(Math.random() * 1000)).padStart(3, '0');
-  return `PGH${year}${month}${random}`;
+export function buildTenFolderHopDong(soHopDong: string, tenKhachHang: string, tenDuAn: string): string {
+  const sttMatch = String(soHopDong || '').trim().match(/^(\d+)\//);
+  const stt = sttMatch ? String(parseInt(sttMatch[1], 10)).padStart(2, '0') : '01';
+  let kh = String(tenKhachHang || '')
+    .replace(/[\\/:*?"<>|]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  kh = kh.replace(/^(công ty tnhh mtv|công ty tnhh|công ty cổ phần|công ty cp|công ty|cty tnhh|cty cp|cty)\s+/i, '');
+  const khWord = kh.split(' ').filter(Boolean)[0] || '';
+  const duAn = String(tenDuAn || '')
+    .replace(/[\\/:*?"<>|]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 40);
+  if (khWord && duAn) return `${stt} ${khWord} - ${duAn}`;
+  if (khWord) return `${stt} ${khWord}`;
+  if (duAn) return `${stt} ${duAn}`;
+  return stt;
+}
+
+export function driveFolderUrl(id?: string | null): string {
+  if (!id) return '';
+  return `https://drive.google.com/drive/folders/${id}`;
+}
+
+export function generateSoPhieu(nam = new Date().getFullYear()): string {
+  return `01/GH/${nam}`;
 }
 
 export function generateSoHoaDonNhap(): string {

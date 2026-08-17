@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { query, queryOne } from '../db.js';
 import { dbErrorResponse } from '../utils/errors.js';
+import { computeTaiKhoanBalances } from '../utils/taiKhoanBalance.js';
 
 const router = Router();
 
@@ -8,27 +9,54 @@ function insertId(result) {
   return Number(result?.insertId ?? result?.[0]?.insertId);
 }
 
+async function listTaiKhoanTien(req) {
+  const loai = String(req.query.loai_tai_khoan || '');
+  const phamVi = String(req.query.pham_vi || '');
+  const trangThai = String(req.query.trang_thai || '');
+  const conditions = [];
+  const params = [];
+  if (loai) {
+    conditions.push('loai_tai_khoan = ?');
+    params.push(loai);
+  }
+  if (phamVi) {
+    conditions.push('pham_vi = ?');
+    params.push(phamVi);
+  }
+  if (trangThai) {
+    conditions.push('trang_thai = ?');
+    params.push(trangThai);
+  }
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+  return query(`SELECT * FROM tai_khoan_tien ${where} ORDER BY ten_tai_khoan`, params);
+}
+
+/** Một lần quét dong_tien_moi → số dư mọi tài khoản (thay N× limit 99999). */
+router.get('/tai-khoan-tien/balances', async (req, res) => {
+  try {
+    const accounts = await listTaiKhoanTien(req);
+    const txs = await query(
+      `SELECT id, loai_giao_dich, so_tien, tai_khoan_tien_id, tai_khoan_nhan_id,
+              chieu_tien, mo_ta_giao_dich, ngay_giao_dich, ten_tai_khoan, nguon_du_lieu
+       FROM dong_tien_moi`
+    );
+    return res.json({ data: computeTaiKhoanBalances(accounts, txs) });
+  } catch (err) {
+    return dbErrorResponse(res, err, 'Không thể tải số dư tài khoản');
+  }
+});
+
 router.get('/tai-khoan-tien', async (req, res) => {
   try {
-    const loai = String(req.query.loai_tai_khoan || '');
-    const phamVi = String(req.query.pham_vi || '');
-    const trangThai = String(req.query.trang_thai || '');
-    const conditions = [];
-    const params = [];
-    if (loai) {
-      conditions.push('loai_tai_khoan = ?');
-      params.push(loai);
+    const rows = await listTaiKhoanTien(req);
+    if (String(req.query.with_balance || '') === '1') {
+      const txs = await query(
+        `SELECT id, loai_giao_dich, so_tien, tai_khoan_tien_id, tai_khoan_nhan_id,
+                chieu_tien, mo_ta_giao_dich, ngay_giao_dich, ten_tai_khoan, nguon_du_lieu
+         FROM dong_tien_moi`
+      );
+      return res.json({ data: computeTaiKhoanBalances(rows, txs) });
     }
-    if (phamVi) {
-      conditions.push('pham_vi = ?');
-      params.push(phamVi);
-    }
-    if (trangThai) {
-      conditions.push('trang_thai = ?');
-      params.push(trangThai);
-    }
-    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
-    const rows = await query(`SELECT * FROM tai_khoan_tien ${where} ORDER BY ten_tai_khoan`, params);
     return res.json({ data: rows });
   } catch (err) {
     return dbErrorResponse(res, err, 'Không thể tải tài khoản tiền');

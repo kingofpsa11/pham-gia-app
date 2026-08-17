@@ -145,7 +145,10 @@ export default function BaoGiaForm({ mode, baoGiaId, initialData, onSaved, onCan
 
   useEffect(() => {
     if (mode === 'create') {
-      setSoBaoGia(generateSoBaoGia());
+      const nam = namTuNgay(ngayBaoGia);
+      baoGiaApi.soTiepTheo(nam)
+        .then((res) => setSoBaoGia(res.data?.so || generateSoBaoGia(nam)))
+        .catch(() => setSoBaoGia(generateSoBaoGia(nam)));
     } else if (initialData) {
       populateFromData(initialData);
     }
@@ -397,7 +400,7 @@ export default function BaoGiaForm({ mode, baoGiaId, initialData, onSaved, onCan
               value={soBaoGia}
               onChange={(e) => setSoBaoGia(e.target.value)}
               className="input-field text-sm"
-              placeholder="Số BG..."
+              placeholder="01/BG/2026"
             />
           </EntityFormField>
 

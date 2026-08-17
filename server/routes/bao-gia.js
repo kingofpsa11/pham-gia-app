@@ -8,6 +8,7 @@ import {
   findBaoGiaTrungSo,
   messageBaoGiaTrung,
 } from '../utils/soTrungNam.js';
+import { nextSoChungTu, nextSoHopDongBan } from '../utils/soChungTu.js';
 
 const router = Router();
 
@@ -88,6 +89,22 @@ router.get('/bao-gia', async (req, res) => {
     return res.json({ data: rows, total: countRow?.total || 0, page, limit });
   } catch (err) {
     return dbErrorResponse(res, err, 'Không thể tải báo giá');
+  }
+});
+
+router.get('/bao-gia/so-tiep-theo', async (req, res) => {
+  try {
+    const nam = parseInt(String(req.query.nam || ''), 10) || new Date().getFullYear();
+    const so = await nextSoChungTu(query, {
+      table: 'bao_gia',
+      column: 'so_bao_gia',
+      dateColumn: 'ngay_bao_gia',
+      kyHieu: 'BG',
+      nam,
+    });
+    return res.json({ data: { so, nam } });
+  } catch (err) {
+    return dbErrorResponse(res, err, 'Không thể lấy số báo giá tiếp theo');
   }
 });
 
@@ -300,9 +317,7 @@ router.post('/convert-bao-gia', async (req, res) => {
 
     const soHopDong =
       req.body.so_hop_dong ||
-      `HD${new Date().getFullYear()}${String(new Date().getMonth() + 1).padStart(2, '0')}${String(
-        Math.floor(Math.random() * 1000)
-      ).padStart(3, '0')}`;
+      (await nextSoHopDongBan(query, new Date().getFullYear()));
 
     const result = await query(
       `INSERT INTO hop_dong (khach_hang_id, ten_du_an, so_hop_dong, ngay_hop_dong, mo_ta_noi_dung, trang_thai, phi_van_chuyen, che_do_van_chuyen, ty_le_tam_ung, gia_tri_tam_ung)

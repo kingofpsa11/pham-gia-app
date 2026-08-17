@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { query, queryOne } from '../db.js';
 import { dbErrorResponse } from '../utils/errors.js';
 import { parsePaging, sqlLimitOffset } from '../utils/pagination.js';
+import { nextSoChungTu } from '../utils/soChungTu.js';
 import {
   CHI_TIET_SELECT,
   calcGiaTriGhiNoFromChiTiet,
@@ -78,6 +79,22 @@ async function khachHangIdFromHopDong(hopDongId) {
   const hd = await queryOne('SELECT khach_hang_id FROM hop_dong WHERE id = ?', [hopDongId]);
   return hd?.khach_hang_id ?? null;
 }
+
+router.get('/phieu-giao-hang/so-tiep-theo', async (req, res) => {
+  try {
+    const nam = parseInt(String(req.query.nam || ''), 10) || new Date().getFullYear();
+    const so = await nextSoChungTu(query, {
+      table: 'phieu_giao_hang',
+      column: 'so_phieu',
+      dateColumn: 'ngay_giao',
+      kyHieu: 'GH',
+      nam,
+    });
+    return res.json({ data: { so, nam } });
+  } catch (err) {
+    return dbErrorResponse(res, err, 'Không thể lấy số phiếu giao hàng tiếp theo');
+  }
+});
 
 router.get('/phieu-giao-hang', async (req, res) => {
   try {

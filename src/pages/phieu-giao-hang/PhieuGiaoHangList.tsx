@@ -141,8 +141,14 @@ export default function PhieuGiaoHangList() {
   useEffect(() => { fetchPhieuGiaoHang(); }, [fetchPhieuGiaoHang]);
   useEffect(() => { setCurrentPage(1); }, [search, filterKhachHang, filterHopDong, filterDateFrom, filterDateTo]);
 
-  function openForm() {
-    setSoPhieu(generateSoPhieu());
+  async function openForm() {
+    const nam = Number((ngayGiao || getTodayInputValue()).slice(0, 4)) || new Date().getFullYear();
+    let so = generateSoPhieu(nam);
+    try {
+      const res = await phieuGiaoHangApi.soTiepTheo(nam);
+      if (res.data?.so) so = res.data.so;
+    } catch { /* fallback local */ }
+    setSoPhieu(so);
     setNgayGiao(getTodayInputValue());
     setKhachHangId('');
     setHopDongId('');
@@ -241,7 +247,12 @@ export default function PhieuGiaoHangList() {
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             <div>
               <label className="block text-xs font-semibold text-gray-600 mb-1">Số phiếu</label>
-              <input value={soPhieu} readOnly className="input-field text-sm w-full bg-gray-50 font-mono" />
+              <input
+                value={soPhieu}
+                onChange={(e) => setSoPhieu(e.target.value)}
+                className="input-field text-sm w-full font-mono"
+                placeholder="01/GH/2026"
+              />
             </div>
             <div>
               <label className="block text-xs font-semibold text-gray-600 mb-1">Ngày giao <span className="text-red-500">*</span></label>

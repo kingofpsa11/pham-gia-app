@@ -55,6 +55,9 @@ export const baoGiaApi = {
       `/bao-gia/kiem-tra-so${buildQuery(params)}`
     ),
 
+  soTiepTheo: (nam?: number) =>
+    request<{ data: { so: string; nam: number } }>(`/bao-gia/so-tiep-theo${buildQuery({ nam })}`),
+
   create: (data: any) =>
     request<{ data: any }>('/bao-gia', { method: 'POST', body: JSON.stringify(data) }),
 
@@ -87,11 +90,20 @@ export const hopDongApi = {
       `/hop-dong/kiem-tra-so${buildQuery(params)}`
     ),
 
+  soTiepTheo: (nam?: number) =>
+    request<{ data: { so: string; nam: number } }>(`/hop-dong/so-tiep-theo${buildQuery({ nam })}`),
+
   create: (data: any) =>
-    request<{ data: any }>('/hop-dong', { method: 'POST', body: JSON.stringify(data) }),
+    request<{ data: any; drive?: any; drive_warning?: string | null }>('/hop-dong', { method: 'POST', body: JSON.stringify(data) }),
 
   update: (id: number, data: any) =>
-    request<{ data: any }>(`/hop-dong/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+    request<{ data: any; drive?: any; drive_warning?: string | null }>(`/hop-dong/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+
+  taoFolder: (id: number, data?: { ten_folder_du_an?: string }) =>
+    request<{ data: any; drive?: any; drive_warning?: string | null }>(
+      `/hop-dong/${id}/tao-folder`,
+      { method: 'POST', body: JSON.stringify(data || {}) }
+    ),
 
   updateStatus: (id: number, trang_thai: string) =>
     request<{ data: any }>(`/hop-dong/${id}/trang-thai`, { method: 'PATCH', body: JSON.stringify({ trang_thai }) }),
@@ -103,6 +115,20 @@ export const hopDongApi = {
     request<{ data: any[] }>(`/hop-dong-by${buildQuery({ khach_hang_id })}`),
 };
 
+export const phuLucHopDongApi = {
+  listByHopDong: (hopDongId: number) =>
+    request<{ data: any[] }>(`/hop-dong/${hopDongId}/phu-luc`),
+
+  get: (id: number) =>
+    request<{ data: any }>(`/phu-luc-hop-dong/${id}`),
+
+  create: (hopDongId: number, data: any) =>
+    request<{ data: any }>(`/hop-dong/${hopDongId}/phu-luc`, { method: 'POST', body: JSON.stringify(data) }),
+
+  delete: (id: number) =>
+    request<{ success: boolean }>(`/phu-luc-hop-dong/${id}`, { method: 'DELETE' }),
+};
+
 // ===================== PHIEU GIAO HANG =====================
 export const phieuGiaoHangApi = {
   list: (params: { search?: string; khach_hang_id?: string; hop_dong_id?: string; date_from?: string; date_to?: string; page?: number; limit?: number } = {}) =>
@@ -110,6 +136,9 @@ export const phieuGiaoHangApi = {
 
   get: (id: number) =>
     request<{ data: any }>(`/phieu-giao-hang/${id}`),
+
+  soTiepTheo: (nam?: number) =>
+    request<{ data: { so: string; nam: number } }>(`/phieu-giao-hang/so-tiep-theo${buildQuery({ nam })}`),
 
   create: (data: any) =>
     request<{ data: any }>('/phieu-giao-hang', { method: 'POST', body: JSON.stringify(data) }),
@@ -220,6 +249,11 @@ export const nhaCungCapApi = {
   hopDongMua: (nha_cung_cap_id: number) =>
     request<{ data: any[] }>(`/hop-dong-mua-by${buildQuery({ nha_cung_cap_id })}`),
 
+  aggregates: (ids: number[]) =>
+    request<{ data: Record<number, { so_hoa_don_mua: number; tong_gia_tri_hoa_don_mua: number; tong_da_thanh_toan: number }> }>(
+      `/nha-cung-cap/aggregates${buildQuery({ ids: ids.join(',') })}`
+    ),
+
   hoaDonNhap: (nha_cung_cap_id: number) =>
     request<{ data: any[] }>(`/hoa-don-nhap-by${buildQuery({ nha_cung_cap_id })}`),
 };
@@ -296,13 +330,21 @@ export const dashboardApi = {
 // ===================== CONG NO =====================
 export const congNoApi = {
   list: () =>
-    request<{ data: any[] }>('/cong-no'),
+    request<{
+      data: any[];
+      tong_cong_no_phai_thu: number;
+      so_khach_hang_dang_no: number;
+      tong_da_thu_thang_nay: number;
+    }>('/cong-no'),
 };
 
 // ===================== TAI KHOAN TIEN =====================
 export const taiKhoanTienApi = {
-  list: (params: { loai_tai_khoan?: string; pham_vi?: string; trang_thai?: string } = {}) =>
+  list: (params: { loai_tai_khoan?: string; pham_vi?: string; trang_thai?: string; with_balance?: string } = {}) =>
     request<{ data: any[] }>(`/tai-khoan-tien${buildQuery(params)}`),
+
+  balances: (params: { loai_tai_khoan?: string; pham_vi?: string; trang_thai?: string } = {}) =>
+    request<{ data: any[] }>(`/tai-khoan-tien/balances${buildQuery(params)}`),
 
   create: (data: any) =>
     request<{ data: any }>('/tai-khoan-tien', { method: 'POST', body: JSON.stringify(data) }),
@@ -350,9 +392,9 @@ export const dongTienMoiApi = {
     date_from?: string; date_to?: string; loai_giao_dich?: string;
     tai_khoan_tien_id?: string | number; pham_vi?: string; hang_muc_thu_chi_id?: string;
     khach_hang_id?: string; nha_cung_cap_id?: string; hop_dong_id?: string; hop_dong_mua_id?: string;
-    search?: string; trang_thai?: string; page?: number; limit?: number;
+    search?: string; trang_thai?: string; page?: number; limit?: number; summary?: string;
   } = {}) =>
-    request<{ data: any[]; total: number }>(`/dong-tien-moi${buildQuery(params)}`),
+    request<{ data: any[]; total: number; tong_thu?: number; tong_chi?: number }>(`/dong-tien-moi${buildQuery(params)}`),
 
   create: (data: any) =>
     request<{ data: any }>('/dong-tien-moi', { method: 'POST', body: JSON.stringify(data) }),

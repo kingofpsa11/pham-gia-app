@@ -7,7 +7,7 @@ import LoadingSpinner from '../../components/ui/LoadingSpinner';
 import Modal from '../../components/ui/Modal';
 import { taiKhoanTienApi, hangMucThuChiApi, cauHinhApi, usersApi } from '../../lib/api';
 import { TaiKhoanTien, HangMucThuChi, PhamViTaiKhoan, PhamViHangMuc, LoaiGiaoDich } from '../../types';
-import { Settings, Users, Shield, Key, Trash2, User, FileSpreadsheet, Upload, CheckCircle, X, HardDrive, Link2, LogOut, Wallet, ListTree, Plus, Pencil, ChevronRight } from 'lucide-react';
+import { Settings, Users, Shield, Key, Trash2, User, FileSpreadsheet, FileText, Upload, CheckCircle, X, HardDrive, Link2, LogOut, Wallet, ListTree, Plus, Pencil, ChevronRight } from 'lucide-react';
 
 function authHeaders(json = false): Record<string, string> {
   const token = localStorage.getItem('token');
@@ -40,7 +40,20 @@ const MAU_KEYS: { key: string; label: string }[] = [
 
 // ─── Template Upload Card ─────────────────────────────────────────────────────
 
-function TemplateUploadCard({ configKey, label }: { configKey: string; label: string }) {
+function TemplateUploadCard({
+  configKey,
+  label,
+  fileType = 'excel',
+}: {
+  configKey: string;
+  label: string;
+  fileType?: 'excel' | 'word';
+}) {
+  const acceptExt = fileType === 'word' ? '.docx' : '.xlsx,.xls';
+  const acceptHint = fileType === 'word' ? '.docx' : '.xlsx, .xls';
+  const FileIcon = fileType === 'word' ? FileText : FileSpreadsheet;
+  const iconBg = fileType === 'word' ? 'bg-blue-100' : 'bg-green-100';
+  const iconColor = fileType === 'word' ? 'text-blue-700' : 'text-green-700';
   const addToast = useToastStore((s) => s.addToast);
   const inputRef = useRef<HTMLInputElement>(null);
   const [meta, setMeta] = useState<TemplateMeta | null>(null);
@@ -71,7 +84,12 @@ function TemplateUploadCard({ configKey, label }: { configKey: string; label: st
   async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
-    if (!file.name.endsWith('.xlsx') && !file.name.endsWith('.xls')) {
+    if (fileType === 'word') {
+      if (!file.name.endsWith('.docx')) {
+        addToast('warning', 'Vui lòng chọn file Word (.docx)');
+        return;
+      }
+    } else if (!file.name.endsWith('.xlsx') && !file.name.endsWith('.xls')) {
       addToast('warning', 'Vui lòng chọn file Excel (.xlsx hoặc .xls)');
       return;
     }
@@ -113,8 +131,8 @@ function TemplateUploadCard({ configKey, label }: { configKey: string; label: st
   return (
     <div className="flex items-center justify-between p-4 rounded-xl border border-gray-200 bg-gray-50 hover:border-blue-200 transition-colors">
       <div className="flex items-center gap-3 min-w-0 flex-1">
-        <div className="w-10 h-10 rounded-lg bg-green-100 flex items-center justify-center flex-shrink-0">
-          <FileSpreadsheet className="w-5 h-5 text-green-700" />
+        <div className={`w-10 h-10 rounded-lg ${iconBg} flex items-center justify-center flex-shrink-0`}>
+          <FileIcon className={`w-5 h-5 ${iconColor}`} />
         </div>
         <div className="min-w-0">
           <p className="text-sm font-semibold text-gray-800">{label}</p>
@@ -137,7 +155,7 @@ function TemplateUploadCard({ configKey, label }: { configKey: string; label: st
               )}
             </div>
           ) : (
-            <p className="text-xs text-gray-400 mt-0.5">Chưa có file mẫu — chỉ chấp nhận .xlsx, .xls</p>
+            <p className="text-xs text-gray-400 mt-0.5">Chưa có file mẫu — chỉ chấp nhận {acceptHint}</p>
           )}
         </div>
       </div>
@@ -162,7 +180,7 @@ function TemplateUploadCard({ configKey, label }: { configKey: string; label: st
           <input
             ref={inputRef}
             type="file"
-            accept=".xlsx,.xls"
+            accept={acceptExt}
             className="hidden"
             onChange={handleFileChange}
             disabled={uploading}
@@ -275,7 +293,8 @@ function GoogleDriveCard() {
           <div>
             <h2 className="text-lg font-semibold text-gray-900">Google Drive</h2>
             <p className="text-xs text-gray-500 mt-0.5">
-              Khi kết nối, file Excel xuất ra sẽ tự động lưu vào Google Drive của bạn
+              Kết nối để tự tạo thư mục hợp đồng theo năm và lưu file xuất ra Drive.
+              Nếu đã kết nối trước đây, hãy ngắt rồi kết nối lại một lần để cấp quyền tạo thư mục.
             </p>
           </div>
         </div>
@@ -286,7 +305,8 @@ function GoogleDriveCard() {
             <p className="font-semibold">Chưa cấu hình Google OAuth trên server</p>
             <p className="mt-1 text-xs text-amber-800">
               Tạo OAuth Client trên Google Cloud Console, thêm redirect URI{' '}
-              <code className="bg-amber-100 px-1 rounded">http://localhost:3000/api/google-drive/callback</code>,{' '}
+              <code className="bg-amber-100 px-1 rounded">{`${window.location.origin}/api/google-drive/callback`}</code>{' '}
+              (hoặc <code className="bg-amber-100 px-1 rounded">{`${window.location.origin}/api/google/callback`}</code> nếu dùng cấu hình cũ),{' '}
               rồi điền <code className="bg-amber-100 px-1 rounded">GOOGLE_CLIENT_ID</code> và{' '}
               <code className="bg-amber-100 px-1 rounded">GOOGLE_CLIENT_SECRET</code> vào file <code className="bg-amber-100 px-1 rounded">.env</code>.
             </p>
@@ -328,7 +348,7 @@ function GoogleDriveCard() {
               </div>
               <div>
                 <p className="text-sm font-semibold text-gray-900">Chưa kết nối</p>
-                <p className="text-xs text-gray-500">Kết nối để tự động lưu file Excel vào Drive</p>
+                <p className="text-xs text-gray-500">Kết nối để tự tạo folder hợp đồng và lưu file xuất</p>
               </div>
             </div>
             <button
@@ -1282,6 +1302,84 @@ export default function CaiDatPage() {
                 {MAU_KEYS.map((m) => (
                   <TemplateUploadCard key={m.key} configKey={m.key} label={m.label} />
                 ))}
+              </div>
+              <div className="pt-6 border-t border-gray-200 space-y-4">
+                <div>
+                  <h2 className="text-lg font-semibold text-gray-900">Mẫu hợp đồng Word</h2>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    Upload file .docx và chèn placeholder <code className="bg-gray-100 px-1 rounded">{'{{ten_bien}}'}</code> vào vị trí cần điền dữ liệu
+                  </p>
+                </div>
+                <TemplateUploadCard configKey="mau_hop_dong" label="Mẫu hợp đồng" fileType="word" />
+                <div className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-xs text-gray-600 space-y-1">
+                  <p className="font-semibold text-gray-800">Placeholder hỗ trợ:</p>
+                  <p>
+                    <code>{'{{so_hop_dong}}'}</code>, <code>{'{{ngay_hop_dong}}'}</code>, <code>{'{{ten_du_an}}'}</code>,{' '}
+                    <code>{'{{ten_cong_ty}}'}</code>, <code>{'{{ma_so_thue}}'}</code>, <code>{'{{dia_chi}}'}</code>,{' '}
+                    <code>{'{{nguoi_dai_dien}}'}</code>, <code>{'{{chuc_vu}}'}</code>, <code>{'{{tong_thanh_toan}}'}</code>,{' '}
+                    <code>{'{{tong_bang_chu}}'}</code>, ...
+                  </p>
+                  <p>
+                    Bảng chi tiết: một dòng mẫu trong bảng Word gồm{' '}
+                    <code>{'{{#chi_tiet}}{{stt}} {{ten_san_pham}} {{don_vi}} {{so_luong}} {{don_gia}} {{thanh_tien}}{{/chi_tiet}}'}</code>
+                  </p>
+                </div>
+              </div>
+              <div className="pt-6 border-t border-gray-200 space-y-4">
+                <div>
+                  <h2 className="text-lg font-semibold text-gray-900">Mẫu biên bản bàn giao (Excel)</h2>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    Xuất từ phiếu giao hàng. Nếu chưa upload, hệ thống dùng mẫu mặc định.
+                  </p>
+                </div>
+                <TemplateUploadCard configKey="mau_bbbg" label="Mẫu BBBG" fileType="excel" />
+                <div className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-xs text-gray-600 space-y-1">
+                  <p className="font-semibold text-gray-800">Placeholder hỗ trợ:</p>
+                  <p>
+                    <code>{'{{so_bbbg}}'}</code>, <code>{'{{ngay}}'}</code>, <code>{'{{thang}}'}</code>, <code>{'{{nam}}'}</code>,{' '}
+                    <code>{'{{ten_cong_ty}}'}</code>, <code>{'{{nguoi_giao}}'}</code>, <code>{'{{nguoi_nhan}}'}</code>,{' '}
+                    <code>{'{{chuc_vu_giao}}'}</code>, <code>{'{{chuc_vu_nhan}}'}</code>
+                  </p>
+                  <p>
+                    Dòng hàng mẫu: <code>{'{{stt}}'}</code>, <code>{'{{ten_san_pham}}'}</code>, <code>{'{{don_vi}}'}</code>,{' '}
+                    <code>{'{{so_luong}}'}</code>, <code>{'{{ghi_chu}}'}</code>
+                  </p>
+                </div>
+              </div>
+              <div className="pt-6 border-t border-gray-200 space-y-4">
+                <div>
+                  <h2 className="text-lg font-semibold text-gray-900">Mẫu đề nghị tạm ứng / thanh toán (Word)</h2>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    Xuất từ hợp đồng. Nếu chưa upload, hệ thống dùng mẫu mặc định.
+                  </p>
+                </div>
+                <TemplateUploadCard configKey="mau_de_nghi_tam_ung" label="Mẫu đề nghị tạm ứng" fileType="word" />
+                <TemplateUploadCard configKey="mau_de_nghi_thanh_toan" label="Mẫu đề nghị thanh toán" fileType="word" />
+                <div className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-xs text-gray-600 space-y-1">
+                  <p className="font-semibold text-gray-800">Placeholder hỗ trợ:</p>
+                  <p>
+                    <code>{'{{so_van_ban}}'}</code>, <code>{'{{tieu_de}}'}</code>, <code>{'{{so_hop_dong}}'}</code>,{' '}
+                    <code>{'{{ten_cong_ty}}'}</code>, <code>{'{{ngay_hop_dong}}'}</code>, <code>{'{{so_tien}}'}</code>,{' '}
+                    <code>{'{{so_tien_bang_chu}}'}</code>, <code>{'{{ngay_ban_giao}}'}</code>, <code>{'{{nguoi_ky}}'}</code>
+                  </p>
+                </div>
+              </div>
+              <div className="pt-6 border-t border-gray-200 space-y-4">
+                <div>
+                  <h2 className="text-lg font-semibold text-gray-900">Mẫu phụ lục hợp đồng (Word)</h2>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    Xuất từ phụ lục. Nếu chưa upload, hệ thống dùng mẫu mặc định.
+                  </p>
+                </div>
+                <TemplateUploadCard configKey="mau_phu_luc_hop_dong" label="Mẫu phụ lục hợp đồng" fileType="word" />
+                <div className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-xs text-gray-600 space-y-1">
+                  <p className="font-semibold text-gray-800">Placeholder hỗ trợ:</p>
+                  <p>
+                    <code>{'{{so_phu_luc}}'}</code>, <code>{'{{so_hop_dong}}'}</code>, <code>{'{{ngay_hop_dong}}'}</code>,{' '}
+                    <code>{'{{ten_cong_ty}}'}</code>, <code>{'{{dieu_1_tieu_de}}'}</code>, <code>{'{{gia_tri_hd_truoc}}'}</code>,{' '}
+                    <code>{'{{gia_tri_phu_luc}}'}</code>, <code>{'{{gia_tri_hd_sau}}'}</code>, <code>{'{{BANG_CHI_TIET}}'}</code>
+                  </p>
+                </div>
               </div>
             </div>
           )}

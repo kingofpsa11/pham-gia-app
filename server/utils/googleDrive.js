@@ -3,8 +3,10 @@ import { query, queryOne } from '../db.js';
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || '';
 const APP_URL = (process.env.APP_URL || 'http://localhost:3000').replace(/\/$/, '');
+const GOOGLE_REDIRECT_PATH =
+  process.env.GOOGLE_REDIRECT_PATH || '/api/google-drive/callback';
 const SCOPES = [
-  'https://www.googleapis.com/auth/drive.file',
+  'https://www.googleapis.com/auth/drive',
   'https://www.googleapis.com/auth/userinfo.email',
 ].join(' ');
 
@@ -12,8 +14,9 @@ export function isGoogleDriveConfigured() {
   return Boolean(GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET);
 }
 
-export function googleRedirectUri() {
-  return `${APP_URL}/api/google-drive/callback`;
+export function googleRedirectUri(path = GOOGLE_REDIRECT_PATH) {
+  const normalized = path.startsWith('/') ? path : `/${path}`;
+  return `${APP_URL}${normalized}`;
 }
 
 export function buildGoogleAuthUrl(state) {
@@ -29,7 +32,7 @@ export function buildGoogleAuthUrl(state) {
   return `https://accounts.google.com/o/oauth2/v2/auth?${params}`;
 }
 
-async function exchangeCodeForTokens(code) {
+async function exchangeCodeForTokens(code, redirectUri = googleRedirectUri()) {
   const resp = await fetch('https://oauth2.googleapis.com/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -37,7 +40,7 @@ async function exchangeCodeForTokens(code) {
       code,
       client_id: GOOGLE_CLIENT_ID,
       client_secret: GOOGLE_CLIENT_SECRET,
-      redirect_uri: googleRedirectUri(),
+      redirect_uri: redirectUri,
       grant_type: 'authorization_code',
     }),
   });
@@ -146,7 +149,7 @@ export async function uploadBufferToDrive(accessToken, fileName, buffer) {
   const body = Buffer.concat([prefix, buffer, suffix]);
 
   const uploadResp = await fetch(
-    'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,webViewLink',
+    'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,mimeType,webViewLink,webContentLink',
     {
       method: 'POST',
       headers: {
@@ -164,11 +167,15 @@ export async function uploadBufferToDrive(accessToken, fileName, buffer) {
     return null;
   }
 
-  return uploadResp.json();
+  const data = await uploadResp.json();
+  if (data.mimeType === 'application/vnd.google-apps.spreadsheet') {
+    console.warn('Drive converted xlsx to Google Sheets:', data.id);
+  }
+  return data;
 }
 
-export async function completeOAuth(code) {
-  const tokenData = await exchangeCodeForTokens(code);
+export async function completeOAuth(code, redirectUri) {
+  const tokenData = await exchangeCodeForTokens(code, redirectUri || googleRedirectUri());
   if (!tokenData.access_token) {
     throw new Error(tokenData.error_description || tokenData.error || 'Token exchange failed');
   }
@@ -181,5 +188,139 @@ export async function uploadExcelToUserDrive(userId, fileName, buffer) {
   const accessToken = await getValidAccessToken(userId);
   if (!accessToken) return null;
   const result = await uploadBufferToDrive(accessToken, fileName, buffer);
-  return result?.webViewLink || null;
+  if (!result?.id) return null;
+  // Link tải trực tiếp file .xlsx (không mở Google Sheets editor)
+  return result.webContentLink || `https://drive.google.com/uc?export=download&id=${result.id}`;
+}
+
+const FOLDER_MIME = 'application/vnd.google-apps.folder';
+
+function driveEscape(value) {
+  return String(value || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+}
+
+export async function driveApi(accessToken, path, { method = 'GET', query: qs, body } = {}) {
+  const url = new URL(`https://www.googleapis.com/drive/v3/${path.replace(/^\//, '')}`);
+  if (qs) {
+    for (const [k, v] of Object.entries(qs)) {
+      if (v != null && v !== '') url.searchParams.set(k, String(v));
+    }
+  }
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 20000);
+  let resp;
+  try {
+    resp = await fetch(url, {
+      method,
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        ...(body ? { 'Content-Type': 'application/json' } : {}),
+      },
+      body: body ? JSON.stringify(body) : undefined,
+      signal: ctrl.signal,
+    });
+  } catch (err) {
+    if (err?.name === 'AbortError') {
+      const timeoutErr = new Error('Google Drive hết thời gian chờ');
+      timeoutErr.status = 504;
+      throw timeoutErr;
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+  const text = await resp.text().catch(() => '');
+  let data = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    data = { raw: text };
+  }
+  if (!resp.ok) {
+    const msg = data?.error?.message || data?.error_description || text || `Drive HTTP ${resp.status}`;
+    const err = new Error(msg);
+    err.status = resp.status;
+    err.code = data?.error?.errors?.[0]?.reason || data?.error?.status;
+    throw err;
+  }
+  return data;
+}
+
+export async function getDriveFile(accessToken, fileId, fields = 'id,name,webViewLink,trashed,parents') {
+  if (!fileId) return null;
+  try {
+    return await driveApi(accessToken, `files/${fileId}`, { qs: { fields, supportsAllDrives: 'true' } });
+  } catch (err) {
+    if (err.status === 404) return null;
+    throw err;
+  }
+}
+
+export async function searchDriveFolders(accessToken, q, pageSize = 50, maxFiles = 50) {
+  const files = [];
+  let pageToken = '';
+  const limit = Math.max(1, Number(maxFiles) || 50);
+  do {
+    const data = await driveApi(accessToken, 'files', {
+      qs: {
+        q,
+        spaces: 'drive',
+        pageSize: String(Math.max(1, Math.min(pageSize, limit - files.length))),
+        fields: 'nextPageToken,files(id,name,parents)',
+        corpora: 'user',
+        ...(pageToken ? { pageToken } : {}),
+      },
+    });
+    files.push(...(data.files || []));
+    pageToken = data.nextPageToken || '';
+  } while (pageToken && files.length < limit);
+  return files;
+}
+
+export async function listChildFolders(accessToken, parentId) {
+  const parent = parentId || 'root';
+  return searchDriveFolders(
+    accessToken,
+    `'${driveEscape(parent)}' in parents and mimeType='${FOLDER_MIME}' and trashed=false`,
+    100,
+    200,
+  );
+}
+
+export async function findChildFolder(accessToken, parentId, name) {
+  const safe = driveEscape(name);
+  const parent = parentId || 'root';
+  const files = await searchDriveFolders(
+    accessToken,
+    `'${driveEscape(parent)}' in parents and name='${safe}' and mimeType='${FOLDER_MIME}' and trashed=false`,
+    10,
+  );
+  return files[0] || null;
+}
+
+export async function createDriveFolder(accessToken, name, parentId) {
+  return driveApi(accessToken, 'files', {
+    method: 'POST',
+    qs: { fields: 'id,name,webViewLink,parents', supportsAllDrives: 'true' },
+    body: {
+      name,
+      mimeType: FOLDER_MIME,
+      parents: parentId ? [parentId] : undefined,
+    },
+  });
+}
+
+export async function renameDriveFile(accessToken, fileId, name) {
+  return driveApi(accessToken, `files/${fileId}`, {
+    method: 'PATCH',
+    qs: { fields: 'id,name,webViewLink,trashed,parents', supportsAllDrives: 'true' },
+    body: { name },
+  });
+}
+
+export async function ensureChildFolder(accessToken, parentId, name) {
+  const existing = await findChildFolder(accessToken, parentId, name);
+  if (existing) return { ...existing, created: false };
+  const created = await createDriveFolder(accessToken, name, parentId);
+  return { ...created, created: true };
 }

@@ -11,9 +11,20 @@ const router = Router();
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 20 * 1024 * 1024 },
-  fileFilter: (_req, file, cb) => {
-    const ok = /\.xlsx?$/i.test(file.originalname);
-    cb(ok ? null : new Error('Chỉ chấp nhận file Excel'), ok);
+  fileFilter: (req, file, cb) => {
+    const key = req.params.key || '';
+    const wordKeys = new Set([
+      'mau_hop_dong',
+      'mau_de_nghi_tam_ung',
+      'mau_de_nghi_thanh_toan',
+      'mau_phu_luc_hop_dong',
+    ]);
+    const isWord = wordKeys.has(key);
+    const ok = isWord
+      ? /\.docx$/i.test(file.originalname)
+      : /\.xlsx?$/i.test(file.originalname);
+    const msg = isWord ? 'Chỉ chấp nhận file Word (.docx)' : 'Chỉ chấp nhận file Excel';
+    cb(ok ? null : new Error(msg), ok);
   },
 });
 

@@ -170,7 +170,7 @@ export default function BaoCaoPage() {
         date_from: startDate,
         date_to: endDate,
         khach_hang_id: baoGiaKhachHang || undefined,
-        limit: 99999,
+        limit: 5000,
       });
 
       const rows = baoGiaRows || [];
@@ -235,7 +235,7 @@ export default function BaoCaoPage() {
         date_to: endDate,
         khach_hang_id: hopDongKhachHang || undefined,
         trang_thai: hopDongTrangThai || undefined,
-        limit: 99999,
+        limit: 5000,
       });
 
       const rows = hopDongRows || [];
@@ -296,13 +296,13 @@ export default function BaoCaoPage() {
       // Get all phieu_giao_hang grouped by khach_hang_id
       const { data: phieuData } = await phieuGiaoHangApi.list({
         khach_hang_id: congNoKhachHang || undefined,
-        limit: 99999,
+        limit: 5000,
       });
 
       // Get all dong_tien payments (ghi_no) grouped by khach_hang_id
       const { data: dongTienData } = await dongTienApi.list({
         khach_hang_id: congNoKhachHang || undefined,
-        limit: 99999,
+        limit: 5000,
       });
 
       // Group phieu_giao_hang by khach_hang_id
@@ -365,7 +365,7 @@ export default function BaoCaoPage() {
         tai_khoan_id: dongTienTaiKhoan || undefined,
         khach_hang_id: dongTienKhachHang || undefined,
         nha_cung_cap_id: dongTienNhaCungCap || undefined,
-        limit: 99999,
+        limit: 5000,
       });
 
       const tkMap = Object.fromEntries(taiKhoanList.map((tk) => [tk.id, tk.ten_tai_khoan]));
@@ -409,7 +409,7 @@ export default function BaoCaoPage() {
         date_from: startDate,
         date_to: endDate,
         loai_chi_phi_id: chiPhiLoai || undefined,
-        limit: 99999,
+        limit: 5000,
       });
 
       // Filter to only chi phi records (ghi_co > 0 and loai_chi_phi_id not null)
@@ -489,7 +489,7 @@ export default function BaoCaoPage() {
         date_from: startDate,
         date_to: endDate,
         nha_cung_cap_id: muaHangNhaCungCap || undefined,
-        limit: 99999,
+        limit: 5000,
       });
 
       const rows = hopDongMuaRows || [];
@@ -516,7 +516,7 @@ export default function BaoCaoPage() {
       if (allHdmIds.length > 0) {
         // Fetch dong_tien with these hop_dong_mua_ids and filter client-side
         const { data: dongTienRows } = await dongTienApi.list({
-          limit: 99999,
+          limit: 5000,
         });
 
         if (dongTienRows) {
