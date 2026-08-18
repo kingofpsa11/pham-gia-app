@@ -27,6 +27,7 @@ import {
 
 const BAO_GIA_DIR = '00 Báo giá';
 const PIN_BAO_GIA_KEY = 'drive_bao_gia_root_id';
+const SUBFOLDERS = ['BV', 'Đầu vào', 'Đầu ra'];
 
 export function folderSttFromName(name) {
   const m = String(name || '').trim().match(/^(\d{2})(?:\s|$|-)/);
@@ -212,6 +213,43 @@ async function listQuoteFolders(accessToken, yearFolderId) {
   return [...map.values()];
 }
 
+async function ensureSubfolders(accessToken, parentId) {
+  const parent = await getDriveFile(accessToken, parentId, 'id,name,mimeType,trashed');
+  if (!isDriveFolder(parent)) {
+    const err = new Error('Không tạo được thư mục con vì thư mục báo giá không hợp lệ');
+    err.status = 400;
+    throw err;
+  }
+  const existing = await listChildFolders(accessToken, parentId);
+  const ids = {};
+  const failed = [];
+  for (const name of SUBFOLDERS) {
+    try {
+      const found = existing.find((f) => driveNamesEqual(f.name, name));
+      if (isDriveFolder(found) && driveNamesEqual(found.name, name)) {
+        ids[name] = found.id;
+        continue;
+      }
+      const created = await createDriveFolder(accessToken, name, parentId);
+      if (created.parents?.length && !created.parents.includes(parentId)) {
+        failed.push(`${name}: tạo sai vị trí`);
+        continue;
+      }
+      ids[name] = created.id;
+      existing.push(created);
+    } catch (err) {
+      console.error('ensureBaoGiaSubfolder failed:', name, err.message || err);
+      failed.push(`${name}: ${err.message || 'lỗi'}`);
+    }
+  }
+  if (failed.length) {
+    const err = new Error(`Không tạo đủ thư mục con (${failed.join('; ')})`);
+    err.status = 500;
+    throw err;
+  }
+  return ids;
+}
+
 async function shareFolderWithEmails(accessToken, folderId, emails) {
   const unique = [...new Set((emails || []).map((e) => String(e || '').trim().toLowerCase()).filter((e) => e.includes('@')))];
   for (const email of unique) {
@@ -220,7 +258,7 @@ async function shareFolderWithEmails(accessToken, folderId, emails) {
 }
 
 /**
- * 00 Phạm Gia / 00 Báo giá / {năm} / {STT 2 số từ folder Drive} {KH} - {dự án}
+ * 00 Phạm Gia / 00 Báo giá / {năm} / {STT 2 số} {KH} - {dự án} / {BV, Đầu vào, Đầu ra}
  * STT = max 2 chữ số đầu của folder cùng năm + 1 (không lấy từ số báo giá).
  */
 export async function ensureBaoGiaDriveFolders({ userId, baoGia, tenKhachHang, shareWithEmail, forceNew = false }) {
@@ -244,12 +282,14 @@ export async function ensureBaoGiaDriveFolders({ userId, baoGia, tenKhachHang, s
           await renameDriveFile(accessToken, current.id, customName);
           current.name = customName;
         }
+        const subfolders = await ensureSubfolders(accessToken, current.id);
         await shareFolderWithEmails(accessToken, current.id, [shareWithEmail, googleEmail]);
         return {
           id_folder: current.id,
           ten_folder: current.name,
           webViewLink: current.webViewLink || `https://drive.google.com/open?id=${current.id}`,
           google_email: googleEmail,
+          subfolders: Object.keys(subfolders),
           created: false,
         };
       }
@@ -279,12 +319,14 @@ export async function ensureBaoGiaDriveFolders({ userId, baoGia, tenKhachHang, s
       throw err;
     }
 
+    const subfolders = await ensureSubfolders(accessToken, quoteFolder.id);
     console.log('Drive bao-gia tree:', {
       baoGiaRootId: baoGiaRoot.id,
       year: yearFolder.name,
       nextStt: String(stt).padStart(2, '0'),
       quote: quoteFolder.name,
       quoteId: quoteFolder.id,
+      subfolders: Object.keys(subfolders),
       siblingCount: siblings.length,
     });
     await shareFolderWithEmails(accessToken, quoteFolder.id, [shareWithEmail, googleEmail]);
@@ -294,6 +336,7 @@ export async function ensureBaoGiaDriveFolders({ userId, baoGia, tenKhachHang, s
       ten_folder: quoteFolder.name || wantedName,
       webViewLink: quoteFolder.webViewLink || `https://drive.google.com/open?id=${quoteFolder.id}`,
       google_email: googleEmail,
+      subfolders: Object.keys(subfolders),
       created: true,
     };
   } catch (err) {

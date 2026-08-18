@@ -361,7 +361,10 @@ export default function BaoGiaForm({ mode, baoGiaId, initialData, onSaved, onCan
         addToast('error', result.drive_warning);
         return;
       }
-      addToast('success', `Đã tạo thư mục Drive: ${result.drive?.ten_folder || result.data?.ten_folder_du_an}`);
+      addToast(
+        'success',
+        `Đã tạo thư mục Drive: ${result.drive?.ten_folder || result.data?.ten_folder_du_an} (BV, Đầu vào, Đầu ra)`,
+      );
     } catch (err) {
       addToast('error', err instanceof Error ? err.message : 'Không tạo được thư mục Drive');
     } finally {
@@ -435,7 +438,7 @@ export default function BaoGiaForm({ mode, baoGiaId, initialData, onSaved, onCan
         if (result.drive_warning) {
           addToast('warning', result.drive_warning);
         } else if (result.drive?.ten_folder) {
-          addToast('success', `Đã tạo thư mục Drive: ${result.drive.ten_folder}`);
+          addToast('success', `Đã tạo thư mục Drive: ${result.drive.ten_folder} (BV, Đầu vào, Đầu ra)`);
         }
         addToast('success', 'Tạo báo giá thành công');
         onSaved(result.data.id);
@@ -447,7 +450,7 @@ export default function BaoGiaForm({ mode, baoGiaId, initialData, onSaved, onCan
         if (result.drive_warning) {
           addToast('warning', result.drive_warning);
         } else if (result.drive?.created && result.drive?.ten_folder) {
-          addToast('success', `Đã tạo thư mục Drive: ${result.drive.ten_folder}`);
+          addToast('success', `Đã tạo thư mục Drive: ${result.drive.ten_folder} (BV, Đầu vào, Đầu ra)`);
         }
         addToast('success', 'Cập nhật báo giá thành công');
         onSaved(baoGiaId!);
@@ -590,7 +593,7 @@ export default function BaoGiaForm({ mode, baoGiaId, initialData, onSaved, onCan
               </button>
             </div>
             <p className="mt-1 text-[11px] text-gray-400">
-              00 Phạm Gia / 00 Báo giá / {namTuNgay(ngayBaoGia)} / STT 2 số từ folder Drive / {tenFolder.trim() || tenFolderGoiY || '...'}
+              00 Phạm Gia / 00 Báo giá / {namTuNgay(ngayBaoGia)} / {tenFolder.trim() || tenFolderGoiY || '...'} / BV · Đầu vào · Đầu ra
               {driveEmail ? ` · Drive: ${driveEmail}` : ''}
             </p>
           </EntityFormField>
