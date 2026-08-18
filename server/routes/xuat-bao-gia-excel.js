@@ -1,11 +1,11 @@
 import { Router } from 'express';
-import { optionalAuth } from '../middleware/auth.js';
+import { requireAuth } from '../middleware/auth.js';
 import { uploadExcelToUserDrive } from '../utils/googleDrive.js';
 import { generateBaoGiaExcel } from '../utils/baoGiaExcel.js';
 
 const router = Router();
 
-router.post('/xuat-bao-gia-excel', optionalAuth, async (req, res) => {
+router.post('/xuat-bao-gia-excel', requireAuth, async (req, res) => {
   try {
     const { bao_gia_id, mau_key } = req.body ?? {};
     if (!bao_gia_id || !mau_key) {
