@@ -31,7 +31,7 @@ import {
 } from 'lucide-react';
 import type {
   TaiKhoanTien, HangMucThuChi, DongTienMoi,
-  KhachHang, NhaCungCap, HopDong, HopDongMua, LoaiGiaoDich, PhamViTaiKhoan,
+  KhachHang, NhaCungCap, HopDong, HopDongMua, LoaiGiaoDich, ChieuTien, PhamViTaiKhoan,
 } from '../../types';
 
 const PAGE_SIZE = 20;
@@ -574,6 +574,7 @@ function parseExcelPaste(text: string): ExcelRow[] {
 // ─── Form values ──────────────────────────────────────────────────────────────
 interface FormValues {
   loai_giao_dich: LoaiGiaoDich;
+  chieu_tien: ChieuTien | '';
   ngay_giao_dich: string;
   tai_khoan_tien_id: string;
   tai_khoan_nhan_id: string;
@@ -592,6 +593,7 @@ interface FormValues {
 
 const emptyForm: FormValues = {
   loai_giao_dich: 'thu',
+  chieu_tien: '',
   ngay_giao_dich: getTodayInputValue(),
   tai_khoan_tien_id: '',
   tai_khoan_nhan_id: '',
@@ -833,6 +835,7 @@ export default function DongTienMoiList() {
       : row.loai_giao_dich;
     setForm({
       loai_giao_dich: loaiGd,
+      chieu_tien: row.chieu_tien || '',
       ngay_giao_dich: toInputDateValue(row.ngay_giao_dich) || getTodayInputValue(),
       tai_khoan_tien_id: String(row.tai_khoan_tien_id),
       tai_khoan_nhan_id: row.tai_khoan_nhan_id ? String(row.tai_khoan_nhan_id) : '',
@@ -868,7 +871,7 @@ export default function DongTienMoiList() {
     try {
       const payload = {
         loai_giao_dich: loaiGd,
-        chieu_tien: loaiGd === 'chuyen_khoan_noi_bo' ? 'chi' : null,
+        chieu_tien: loaiGd === 'chuyen_khoan_noi_bo' ? (form.chieu_tien || 'chi') : null,
         ngay_giao_dich: form.ngay_giao_dich,
         tai_khoan_tien_id: Number(form.tai_khoan_tien_id),
         tai_khoan_nhan_id: form.tai_khoan_nhan_id ? Number(form.tai_khoan_nhan_id) : null,
