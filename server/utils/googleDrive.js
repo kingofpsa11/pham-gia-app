@@ -193,7 +193,25 @@ export async function uploadExcelToUserDrive(userId, fileName, buffer) {
   return result.webContentLink || `https://drive.google.com/uc?export=download&id=${result.id}`;
 }
 
-const FOLDER_MIME = 'application/vnd.google-apps.folder';
+export const FOLDER_MIME = 'application/vnd.google-apps.folder';
+const SHORTCUT_MIME = 'application/vnd.google-apps.shortcut';
+
+export function isDriveFolder(file) {
+  return Boolean(file?.id) && file.mimeType === FOLDER_MIME && file.trashed !== true;
+}
+
+export function foldDriveName(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/\p{M}/gu, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+export function driveNamesEqual(a, b) {
+  return foldDriveName(a) === foldDriveName(b);
+}
 
 function driveEscape(value) {
   return String(value || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
@@ -246,7 +264,7 @@ export async function driveApi(accessToken, path, { method = 'GET', query: qs, b
   return data;
 }
 
-export async function getDriveFile(accessToken, fileId, fields = 'id,name,webViewLink,trashed,parents') {
+export async function getDriveFile(accessToken, fileId, fields = 'id,name,mimeType,webViewLink,trashed,parents,createdTime,shortcutDetails') {
   if (!fileId) return null;
   try {
     return await driveApi(accessToken, `files/${fileId}`, { qs: { fields, supportsAllDrives: 'true' } });
@@ -256,7 +274,7 @@ export async function getDriveFile(accessToken, fileId, fields = 'id,name,webVie
   }
 }
 
-export async function searchDriveFolders(accessToken, q, pageSize = 50, maxFiles = 50) {
+async function listDriveFiles(accessToken, q, pageSize = 50, maxFiles = 50) {
   const files = [];
   let pageToken = '';
   const limit = Math.max(1, Number(maxFiles) || 50);
@@ -264,50 +282,254 @@ export async function searchDriveFolders(accessToken, q, pageSize = 50, maxFiles
     const data = await driveApi(accessToken, 'files', {
       qs: {
         q,
-        spaces: 'drive',
         pageSize: String(Math.max(1, Math.min(pageSize, limit - files.length))),
-        fields: 'nextPageToken,files(id,name,parents)',
-        corpora: 'user',
+        fields: 'nextPageToken,files(id,name,parents,mimeType,trashed,shortcutDetails,webViewLink,createdTime)',
+        supportsAllDrives: 'true',
         ...(pageToken ? { pageToken } : {}),
       },
     });
-    files.push(...(data.files || []));
+    files.push(...(data.files || []).filter((f) => f?.id && f.trashed !== true));
     pageToken = data.nextPageToken || '';
   } while (pageToken && files.length < limit);
   return files;
 }
 
-export async function listChildFolders(accessToken, parentId) {
-  const parent = parentId || 'root';
-  return searchDriveFolders(
-    accessToken,
-    `'${driveEscape(parent)}' in parents and mimeType='${FOLDER_MIME}' and trashed=false`,
-    100,
-    200,
-  );
+function uniqueById(files) {
+  const seen = new Set();
+  const out = [];
+  for (const f of files || []) {
+    if (!f?.id || seen.has(f.id)) continue;
+    seen.add(f.id);
+    out.push(f);
+  }
+  return out;
 }
 
-export async function findChildFolder(accessToken, parentId, name) {
-  const safe = driveEscape(name);
+function queryLooksHonored(files, expectedName) {
+  if (!files.length) return true;
+  if (files.length > 20) return false;
+  if (!expectedName) return files.length <= 20;
+  return files.every((f) => driveNamesEqual(f.name, expectedName));
+}
+
+function looksLikeGlobalFolderDump(files) {
+  if ((files || []).length >= 40) return true;
+  const names = (files || []).map((f) => foldDriveName(f.name));
+  const hasYear = names.some((n) => /^\d{4}$/.test(n));
+  const hasHopDong = names.includes(foldDriveName('Hợp đồng'));
+  const hasBV = names.includes('bv');
+  const hasDauRa = names.includes(foldDriveName('Đầu ra'));
+  if (hasYear && hasHopDong && (hasBV || hasDauRa)) return true;
+  const contractLike = (files || []).filter((f) => /^\d{1,2}\s+\S+/.test(String(f.name || ''))).length;
+  return contractLike >= 3;
+}
+
+export async function searchDriveFolders(accessToken, q, pageSize = 50, maxFiles = 50) {
+  const files = await listDriveFiles(accessToken, q, pageSize, maxFiles);
+  return files.filter((f) => isDriveFolder(f));
+}
+
+export async function resolveToFolder(accessToken, fileOrId) {
+  if (!fileOrId) return null;
+  let file = typeof fileOrId === 'string'
+    ? await getDriveFile(accessToken, fileOrId)
+    : fileOrId;
+  if (!file?.id || file.trashed === true) return null;
+  if (!file.mimeType) {
+    file = await getDriveFile(accessToken, file.id) || file;
+  }
+  if (file.mimeType === SHORTCUT_MIME) {
+    const targetId = file.shortcutDetails?.targetId
+      || (await getDriveFile(accessToken, file.id, 'id,shortcutDetails'))?.shortcutDetails?.targetId;
+    if (!targetId) return null;
+    const target = await getDriveFile(accessToken, targetId);
+    return isDriveFolder(target) ? target : null;
+  }
+  if (isDriveFolder(file)) return file;
+  if (file.id && !file.mimeType) {
+    const again = await getDriveFile(accessToken, file.id);
+    return isDriveFolder(again) ? again : null;
+  }
+  return null;
+}
+
+export async function listDirectItems(accessToken, parentId, maxFiles = 25, { strict = true } = {}) {
+  const parent = parentId || 'root';
+  const files = await listDriveFiles(
+    accessToken,
+    `'${driveEscape(parent)}' in parents and trashed=false`,
+    maxFiles,
+    maxFiles,
+  );
+  const withParent = files.filter((f) => (f.parents || []).includes(parent));
+  if (withParent.length) return withParent;
+  if (!strict) return files;
+  if (!files.length || looksLikeGlobalFolderDump(files)) return [];
+  if (files.length <= 20) return files;
+  return [];
+}
+
+export async function findFoldersByNames(accessToken, names) {
+  const wanted = [...new Set((names || []).map((n) => String(n || '').trim()).filter(Boolean))];
+  if (!wanted.length) return [];
+  const matches = [];
+  for (const name of wanted) {
+    let files = await listDriveFiles(
+      accessToken,
+      `name='${driveEscape(name)}' and trashed=false`,
+      50,
+      50,
+    );
+    if (!files.some((f) => wanted.some((n) => driveNamesEqual(f.name, n)))) {
+      files = await listDriveFiles(
+        accessToken,
+        `name contains '${driveEscape(name)}' and trashed=false`,
+        50,
+        50,
+      );
+    }
+    for (const f of files) {
+      if (!wanted.some((n) => driveNamesEqual(f.name, n))) continue;
+      const resolved = await resolveToFolder(accessToken, f.id || f);
+      if (resolved) matches.push(resolved);
+      else if (f.id) matches.push(f);
+    }
+  }
+  return uniqueById(matches);
+}
+
+export async function findFolderByNames(accessToken, names) {
+  const found = await findFoldersByNames(accessToken, names);
+  return found[0] || null;
+}
+
+export async function listChildFolders(accessToken, parentId) {
   const parent = parentId || 'root';
   const files = await searchDriveFolders(
     accessToken,
-    `'${driveEscape(parent)}' in parents and name='${safe}' and mimeType='${FOLDER_MIME}' and trashed=false`,
-    10,
+    `'${driveEscape(parent)}' in parents and mimeType='${FOLDER_MIME}' and trashed=false`,
+    50,
+    50,
   );
-  return files[0] || null;
+  const withParent = files.filter((f) => (f.parents || []).includes(parent));
+  if (withParent.length) return withParent;
+  if (!files.length || looksLikeGlobalFolderDump(files)) return [];
+  if (queryLooksHonored(files)) return files;
+  return [];
+}
+
+function foldersNamed(files, want) {
+  return uniqueById((files || []).filter((f) => isDriveFolder(f) && driveNamesEqual(f.name, want)));
+}
+
+function sortOldestFirst(files) {
+  return [...(files || [])].sort((a, b) =>
+    String(a.createdTime || '').localeCompare(String(b.createdTime || '')),
+  );
+}
+
+export async function findAllFoldersNamed(accessToken, name, maxFiles = 100) {
+  const want = String(name || '').trim();
+  if (!want) return [];
+  const files = await listDriveFiles(
+    accessToken,
+    `name='${driveEscape(want)}' and mimeType='${FOLDER_MIME}' and trashed=false`,
+    100,
+    maxFiles,
+  );
+  return foldersNamed(files, want);
+}
+
+export async function moveToParent(accessToken, fileId, parentId) {
+  if (!fileId || !parentId || parentId === 'root') {
+    return getDriveFile(accessToken, fileId);
+  }
+  try {
+    return await driveApi(accessToken, `files/${fileId}`, {
+      method: 'PATCH',
+      qs: {
+        addParents: parentId,
+        supportsAllDrives: 'true',
+        fields: 'id,name,mimeType,parents,webViewLink,trashed,createdTime',
+      },
+    });
+  } catch (err) {
+    console.warn('moveToParent:', err.message || err);
+    return getDriveFile(accessToken, fileId);
+  }
+}
+
+export async function findChildFolder(accessToken, parentId, name) {
+  const want = String(name || '').trim();
+  if (!want || !parentId) return null;
+
+  const queried = await listDriveFiles(
+    accessToken,
+    `'${driveEscape(parentId)}' in parents and name='${driveEscape(want)}' and mimeType='${FOLDER_MIME}' and trashed=false`,
+    50,
+    50,
+  );
+  const named = foldersNamed(queried, want);
+  const underParent = named.filter((f) => (f.parents || []).includes(parentId));
+  if (underParent.length) return sortOldestFirst(underParent)[0];
+  if (named.length && queryLooksHonored(queried, want)) return sortOldestFirst(named)[0];
+
+  if (/^\d{4}$/.test(want)) {
+    const all = await findAllFoldersNamed(accessToken, want, 100);
+    if (all.length) return sortOldestFirst(all)[0];
+  }
+  return null;
 }
 
 export async function createDriveFolder(accessToken, name, parentId) {
-  return driveApi(accessToken, 'files', {
+  let parent = parentId || undefined;
+  if (parent && parent !== 'root') {
+    const real = await resolveToFolder(accessToken, parent);
+    parent = real?.id || parent;
+  }
+  const created = await driveApi(accessToken, 'files', {
     method: 'POST',
-    qs: { fields: 'id,name,webViewLink,parents', supportsAllDrives: 'true' },
+    qs: { fields: 'id,name,mimeType,webViewLink,parents', supportsAllDrives: 'true' },
     body: {
       name,
       mimeType: FOLDER_MIME,
-      parents: parentId ? [parentId] : undefined,
+      parents: parent ? [parent] : undefined,
     },
   });
+  if (!isDriveFolder(created)) {
+    const err = new Error('Google Drive trả về file không phải thư mục');
+    err.status = 500;
+    throw err;
+  }
+  return created;
+}
+
+/** Chia sẻ folder cho email khác (Drive 404 nếu mở bằng tài khoản không có quyền). */
+export async function shareDriveFile(accessToken, fileId, email, role = 'writer') {
+  const address = String(email || '').trim().toLowerCase();
+  if (!fileId || !address || !address.includes('@')) return false;
+  try {
+    await driveApi(accessToken, `files/${fileId}/permissions`, {
+      method: 'POST',
+      qs: {
+        supportsAllDrives: 'true',
+        sendNotificationEmail: 'false',
+      },
+      body: {
+        type: 'user',
+        role,
+        emailAddress: address,
+      },
+    });
+    return true;
+  } catch (err) {
+    const msg = String(err?.message || '');
+    if (err?.status === 400 || err?.status === 409 || /already|exists|owner/i.test(msg)) {
+      return true;
+    }
+    console.warn('shareDriveFile:', address, err.message || err);
+    return false;
+  }
 }
 
 export async function renameDriveFile(accessToken, fileId, name) {
@@ -318,9 +540,33 @@ export async function renameDriveFile(accessToken, fileId, name) {
   });
 }
 
-export async function ensureChildFolder(accessToken, parentId, name) {
-  const existing = await findChildFolder(accessToken, parentId, name);
-  if (existing) return { ...existing, created: false };
-  const created = await createDriveFolder(accessToken, name, parentId);
+export async function ensureChildFolder(accessToken, parentId, name, { fallbackRoot = true } = {}) {
+  let parent = parentId || 'root';
+  if (parent !== 'root') {
+    const parentFile = await resolveToFolder(accessToken, parent);
+    if (!isDriveFolder(parentFile)) {
+      if (!fallbackRoot) {
+        const err = new Error('Thư mục cha không hợp lệ trên Google Drive');
+        err.status = 400;
+        throw err;
+      }
+      parent = 'root';
+    } else {
+      parent = parentFile.id;
+    }
+  }
+  const existing = await findChildFolder(accessToken, parent, name);
+  if (isDriveFolder(existing) && driveNamesEqual(existing.name, name)) {
+    return { ...existing, created: false };
+  }
+  if (/^\d{4}$/.test(String(name || '').trim())) {
+    const named = await findAllFoldersNamed(accessToken, name, 50);
+    if (named.length) {
+      const under = named.filter((f) => (f.parents || []).includes(parent));
+      const pick = (under[0] || sortOldestFirst(named)[0]);
+      if (pick) return { ...pick, created: false };
+    }
+  }
+  const created = await createDriveFolder(accessToken, name, parent);
   return { ...created, created: true };
 }

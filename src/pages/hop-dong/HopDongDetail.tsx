@@ -73,6 +73,7 @@ export default function HopDongDetail() {
   const addToast = useToastStore((s) => s.addToast);
 
   const [hopDong, setHopDong] = useState<HopDongFull | null>(null);
+  const [driveEmail, setDriveEmail] = useState('');
   const [chiTiet, setChiTiet] = useState<HopDongChiTiet[]>([]);
   const [phieuGiaoList, setPhieuGiaoList] = useState<PhieuGiaoHang[]>([]);
   const [dongTienList, setDongTienList] = useState<DongTienMoi[]>([]);
@@ -102,6 +103,18 @@ export default function HopDongDetail() {
   useEffect(() => {
     if (id) fetchHopDong();
   }, [id]);
+
+  useEffect(() => {
+    const token = localStorage.getItem('token');
+    fetch('/api/google-drive/status', {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (data?.connected && data.google_email) setDriveEmail(data.google_email);
+      })
+      .catch(() => {});
+  }, []);
 
   async function fetchHopDong() {
     setLoading(true);
@@ -525,7 +538,7 @@ export default function HopDongDetail() {
                 <p className="text-xs font-medium text-gray-500">Thư mục Drive</p>
                 {hopDong.id_folder_du_an ? (
                   <a
-                    href={driveFolderUrl(hopDong.id_folder_du_an)}
+                    href={driveFolderUrl(hopDong.id_folder_du_an, driveEmail)}
                     target="_blank"
                     rel="noreferrer"
                     className="text-sm font-semibold text-blue-700 hover:underline inline-flex items-center gap-1"

@@ -608,9 +608,15 @@ export function buildTenFolderHopDong(soHopDong: string, tenKhachHang: string, t
   return stt;
 }
 
-export function driveFolderUrl(id?: string | null): string {
+export function driveFolderUrl(id?: string | null, googleEmail?: string | null): string {
   if (!id) return '';
-  return `https://drive.google.com/drive/folders/${id}`;
+  const folder = `https://drive.google.com/drive/folders/${encodeURIComponent(id)}`;
+  const email = String(googleEmail || '').trim();
+  const continueUrl = encodeURIComponent(folder);
+  if (email) {
+    return `https://accounts.google.com/AccountChooser?Email=${encodeURIComponent(email)}&continue=${continueUrl}`;
+  }
+  return `https://drive.google.com/open?id=${encodeURIComponent(id)}`;
 }
 
 export function generateSoPhieu(nam = new Date().getFullYear()): string {

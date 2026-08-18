@@ -3,15 +3,26 @@ import { parseSoHopDongBan } from './soChungTu.js';
 import { query, queryOne } from '../db.js';
 import {
   getValidAccessToken,
+  getDriveTokenRow,
   getDriveFile,
-  searchDriveFolders,
   listChildFolders,
+  listDirectItems,
+  findAllFoldersNamed,
+  findFoldersByNames,
+  resolveToFolder,
+  moveToParent,
   ensureChildFolder,
+  createDriveFolder,
   renameDriveFile,
+  shareDriveFile,
+  isDriveFolder,
+  driveNamesEqual,
+  foldDriveName,
 } from './googleDrive.js';
 
 const SUBFOLDERS = ['BV', 'Đầu ra', 'Đầu vào'];
 const HOP_DONG_DIR = 'Hợp đồng';
+const PHAM_GIA_NAMES = ['00 Phạm Gia', 'Phạm Gia'];
 const CACHE_KEY = 'drive_folder_cache';
 
 export function sanitizeDriveName(value) {
@@ -99,55 +110,169 @@ async function saveCache(cache) {
   }
 }
 
-async function validCachedFolder(accessToken, id) {
+async function validCachedFolder(accessToken, id, expectedNames) {
   if (!id) return null;
-  const file = await getDriveFile(accessToken, id, 'id,name,trashed');
-  if (!file || file.trashed) return null;
+  const file = await getDriveFile(accessToken, id, 'id,name,mimeType,trashed,webViewLink,parents');
+  if (!isDriveFolder(file)) return null;
+  if (Array.isArray(expectedNames) && expectedNames.length
+    && !expectedNames.some((name) => driveNamesEqual(name, file.name))) {
+    return null;
+  }
   return file;
 }
 
-async function findPhamGiaRoot(accessToken, cache) {
-  const cached = await validCachedFolder(accessToken, cache.rootId);
-  if (cached) return cached;
+function looksLikePhamGiaName(name) {
+  const n = foldDriveName(name);
+  return n === foldDriveName('00 Phạm Gia')
+    || n === foldDriveName('Phạm Gia')
+    || /^00\s*pham\s*gia$/.test(n);
+}
 
-  const names = ['00 Phạm Gia', 'Phạm Gia'];
-  for (const name of names) {
-    const found = await searchDriveFolders(
-      accessToken,
-      `name='${name.replace(/'/g, "\\'")}' and mimeType='application/vnd.google-apps.folder' and trashed=false`,
-      5,
-      5,
-    );
-    if (found[0]) {
-      cache.rootId = found[0].id;
-      await saveCache(cache);
-      return found[0];
+function missingPhamGiaError() {
+  const err = new Error(
+    'Không tìm thấy thư mục "00 Phạm Gia" trên Google Drive. Vào Cài đặt → Google Drive, ngắt kết nối rồi kết nối lại.',
+  );
+  err.status = 400;
+  return err;
+}
+
+async function scorePhamGiaFolder(accessToken, folder) {
+  const kids = await listDirectItems(accessToken, folder.id, 25);
+  if (!kids.length) return 0;
+  let score = 0;
+  for (const k of kids) {
+    const n = foldDriveName(k.name);
+    if (n === foldDriveName('Hợp đồng')) score += 3;
+    if (n.includes('cccl') || n.includes('cqcl')) score += 10;
+    if (n.includes('cong no')) score += 10;
+    if (/^\d{4}$/.test(String(k.name || '').trim())) score += 1;
+  }
+  if (kids.length <= 15) score += 2;
+  return score;
+}
+
+async function findPhamGiaRoot(accessToken, cache) {
+  const named = await findFoldersByNames(accessToken, PHAM_GIA_NAMES);
+  const top = await listDirectItems(accessToken, 'root', 100, { strict: false });
+  for (const f of top) {
+    if (!looksLikePhamGiaName(f.name)) continue;
+    named.push(f);
+  }
+
+  const uniq = [];
+  const seen = new Set();
+  for (const f of named) {
+    const real = await resolveToFolder(accessToken, f.id || f);
+    const folder = isDriveFolder(real) ? real : (isDriveFolder(f) ? f : null);
+    if (!folder?.id || seen.has(folder.id)) continue;
+    if (!looksLikePhamGiaName(folder.name) && real && !looksLikePhamGiaName(real.name)) continue;
+    seen.add(folder.id);
+    uniq.push(folder);
+  }
+  if (!uniq.length) throw missingPhamGiaError();
+
+  let best = uniq[0];
+  let bestScore = -1;
+  for (const f of uniq) {
+    const score = await scorePhamGiaFolder(accessToken, f);
+    if (score > bestScore) {
+      bestScore = score;
+      best = f;
     }
   }
-  return null;
+
+  cache.rootId = best.id;
+  await saveCache(cache);
+  console.log('Drive Phạm Gia root:', { id: best.id, name: best.name, score: bestScore, candidates: uniq.length });
+  return best;
 }
 
 async function ensureYearFolder(accessToken, nam, cache) {
   const yearName = String(nam);
-  cache.years = cache.years || {};
-  const cached = await validCachedFolder(accessToken, cache.years[yearName]);
-  if (cached) return cached;
-
   const root = await findPhamGiaRoot(accessToken, cache);
-  const parentId = root?.id || 'root';
-  const yearFolder = await ensureChildFolder(accessToken, parentId, yearName);
-  cache.years[yearName] = yearFolder.id;
-  if (root?.id) cache.rootId = root.id;
+  if (!isDriveFolder(root) || root.id === 'root') {
+    throw missingPhamGiaError();
+  }
+
+  cache.years = cache.years || {};
+  const here = await listDirectItems(accessToken, root.id, 25);
+  const yearHere = here.find((f) => isDriveFolder(f) && driveNamesEqual(f.name, yearName));
+  if (yearHere) {
+    cache.years[yearName] = { id: yearHere.id, parentId: root.id };
+    cache.rootId = root.id;
+    await saveCache(cache);
+    console.log('Drive year folder in Phạm Gia:', yearHere.id);
+    return yearHere;
+  }
+
+  const named = await findAllFoldersNamed(accessToken, yearName, 50);
+  if (named.length) {
+    const underRoot = named.filter((f) => (f.parents || []).includes(root.id));
+    const oldest = [...named].sort((a, b) =>
+      String(a.createdTime || '').localeCompare(String(b.createdTime || '')),
+    )[0];
+    let yearFolder = underRoot[0] || oldest;
+    const moved = await moveToParent(accessToken, yearFolder.id, root.id);
+    if (isDriveFolder(moved)) yearFolder = moved;
+    cache.years[yearName] = { id: yearFolder.id, parentId: root.id };
+    cache.rootId = root.id;
+    await saveCache(cache);
+    console.log('Drive year folder moved/reused:', { yearId: yearFolder.id, found: named.length });
+    return yearFolder;
+  }
+
+  const yearFolder = await createDriveFolder(accessToken, yearName, root.id);
+  if (!isDriveFolder(yearFolder) || !driveNamesEqual(yearFolder.name, yearName)) {
+    const err = new Error(`Không tạo được thư mục năm ${yearName} trong "00 Phạm Gia"`);
+    err.status = 500;
+    throw err;
+  }
+  cache.years[yearName] = { id: yearFolder.id, parentId: root.id };
+  cache.rootId = root.id;
   await saveCache(cache);
+  console.log('Drive year folder created:', {
+    phamGia: root.name,
+    phamGiaId: root.id,
+    year: yearFolder.name,
+    yearId: yearFolder.id,
+  });
   return yearFolder;
 }
 
 async function ensureSubfolders(accessToken, parentId) {
-  const created = await Promise.all(SUBFOLDERS.map((name) => ensureChildFolder(accessToken, parentId, name)));
+  const parent = await getDriveFile(accessToken, parentId, 'id,name,mimeType,trashed');
+  if (!isDriveFolder(parent)) {
+    const err = new Error('Không tạo được thư mục con vì thư mục hợp đồng không hợp lệ');
+    err.status = 400;
+    throw err;
+  }
+  const existing = await listChildFolders(accessToken, parentId);
   const ids = {};
-  SUBFOLDERS.forEach((name, i) => {
-    ids[name] = created[i].id;
-  });
+  const failed = [];
+  for (const name of SUBFOLDERS) {
+    try {
+      const found = existing.find((f) => driveNamesEqual(f.name, name));
+      if (isDriveFolder(found) && driveNamesEqual(found.name, name)) {
+        ids[name] = found.id;
+        continue;
+      }
+      const created = await createDriveFolder(accessToken, name, parentId);
+      if (created.parents?.length && !created.parents.includes(parentId)) {
+        failed.push(`${name}: tạo sai vị trí`);
+        continue;
+      }
+      ids[name] = created.id;
+      existing.push(created);
+    } catch (err) {
+      console.error('ensureSubfolder failed:', name, err.message || err);
+      failed.push(`${name}: ${err.message || 'lỗi'}`);
+    }
+  }
+  if (failed.length) {
+    const err = new Error(`Không tạo đủ thư mục con (${failed.join('; ')})`);
+    err.status = 500;
+    throw err;
+  }
   return ids;
 }
 
@@ -163,11 +288,18 @@ function permissionHint(err) {
   return msg || 'Không tạo được thư mục Google Drive';
 }
 
+async function shareFolderWithEmails(accessToken, folderId, emails) {
+  const unique = [...new Set((emails || []).map((e) => String(e || '').trim().toLowerCase()).filter((e) => e.includes('@')))];
+  for (const email of unique) {
+    await shareDriveFile(accessToken, folderId, email);
+  }
+}
+
 /**
  * Tạo (hoặc tái sử dụng) cây folder:
  * {năm}/Hợp đồng/{STT KH - dự án}/{BV, Đầu ra, Đầu vào}
  */
-export async function ensureHopDongDriveFolders({ userId, hopDong, tenKhachHang }) {
+export async function ensureHopDongDriveFolders({ userId, hopDong, tenKhachHang, shareWithEmail, forceNew = false }) {
   if (!userId) {
     return { warning: 'Chưa đăng nhập nên chưa tạo được folder Google Drive' };
   }
@@ -175,22 +307,27 @@ export async function ensureHopDongDriveFolders({ userId, hopDong, tenKhachHang 
   if (!accessToken) {
     return { warning: 'Chưa kết nối Google Drive. Vào Cài đặt để kết nối rồi lưu lại hợp đồng.' };
   }
+  const tokenRow = await getDriveTokenRow(userId);
+  const googleEmail = tokenRow?.google_email || '';
 
   try {
-    const existingId = String(hopDong.id_folder_du_an || '').trim();
+    const existingId = forceNew ? '' : String(hopDong.id_folder_du_an || '').trim();
     const customName = sanitizeDriveName(hopDong.ten_folder_du_an);
     if (existingId) {
       const current = await getDriveFile(accessToken, existingId);
-      if (current && !current.trashed) {
+      if (isDriveFolder(current)) {
         if (customName && customName !== current.name) {
           await renameDriveFile(accessToken, current.id, customName);
           current.name = customName;
         }
-        await ensureSubfolders(accessToken, current.id);
+        const subfolders = await ensureSubfolders(accessToken, current.id);
+        await shareFolderWithEmails(accessToken, current.id, [shareWithEmail, googleEmail]);
         return {
           id_folder: current.id,
           ten_folder: current.name,
-          webViewLink: current.webViewLink || `https://drive.google.com/drive/folders/${current.id}`,
+          webViewLink: current.webViewLink || `https://drive.google.com/open?id=${current.id}`,
+          google_email: googleEmail,
+          subfolders: Object.keys(subfolders),
           created: false,
         };
       }
@@ -199,7 +336,22 @@ export async function ensureHopDongDriveFolders({ userId, hopDong, tenKhachHang 
     const cache = await loadCache();
     const nam = parseNamFromDate(hopDong.ngay_hop_dong);
     const yearFolder = await ensureYearFolder(accessToken, nam, cache);
-    const hopDongRoot = await ensureChildFolder(accessToken, yearFolder.id, HOP_DONG_DIR);
+    if (!isDriveFolder(yearFolder) || !driveNamesEqual(yearFolder.name, String(nam))) {
+      const err = new Error(`Không tìm thấy thư mục năm ${nam} trên Google Drive`);
+      err.status = 500;
+      throw err;
+    }
+
+    const yearKids = await listDirectItems(accessToken, yearFolder.id, 25);
+    let hopDongRoot = yearKids.find((f) => isDriveFolder(f) && driveNamesEqual(f.name, HOP_DONG_DIR));
+    if (!hopDongRoot) {
+      hopDongRoot = await ensureChildFolder(accessToken, yearFolder.id, HOP_DONG_DIR, { fallbackRoot: false });
+    }
+    if (!isDriveFolder(hopDongRoot) || !driveNamesEqual(hopDongRoot.name, HOP_DONG_DIR)) {
+      const err = new Error(`Không tìm thấy thư mục "${HOP_DONG_DIR}" trong năm ${nam}`);
+      err.status = 500;
+      throw err;
+    }
     const siblings = await listChildFolders(accessToken, hopDongRoot.id);
 
     let stt = sttTuSoHopDong(hopDong.so_hop_dong);
@@ -219,23 +371,48 @@ export async function ensureHopDongDriveFolders({ userId, hopDong, tenKhachHang 
       stt,
     );
 
-    const exact = (siblings || []).find((f) => f.name === wantedName);
-    const existingByStt = customName ? null : findFolderByStt(siblings, stt);
-
-    let contractFolder = exact || existingByStt;
+    let contractFolder;
     let created = false;
-    if (!contractFolder) {
-      contractFolder = await ensureChildFolder(accessToken, hopDongRoot.id, wantedName);
-      created = !!contractFolder.created;
+    if (forceNew) {
+      contractFolder = await createDriveFolder(accessToken, wantedName, hopDongRoot.id);
+      created = true;
+    } else {
+      const exact = (siblings || []).find((f) => f.name === wantedName);
+      const existingByStt = customName ? null : findFolderByStt(siblings, stt);
+      contractFolder = exact || existingByStt;
+      if (!contractFolder) {
+        contractFolder = await ensureChildFolder(accessToken, hopDongRoot.id, wantedName, { fallbackRoot: false });
+        created = !!contractFolder.created;
+      }
     }
 
-    await ensureSubfolders(accessToken, contractFolder.id);
-    const detail = await getDriveFile(accessToken, contractFolder.id);
+    if (!isDriveFolder(contractFolder)) {
+      const err = new Error('Google Drive trả về file không phải thư mục hợp đồng');
+      err.status = 500;
+      throw err;
+    }
+    if (contractFolder.parents?.length && !contractFolder.parents.includes(hopDongRoot.id)) {
+      const err = new Error(`Thư mục "${wantedName}" không nằm trong thư mục ${HOP_DONG_DIR}`);
+      err.status = 500;
+      throw err;
+    }
+
+    const subfolders = await ensureSubfolders(accessToken, contractFolder.id);
+    console.log('Drive hop-dong tree:', {
+      phamGiaId: cache.rootId,
+      year: yearFolder.name,
+      hopDong: hopDongRoot.name,
+      contract: contractFolder.name,
+      subfolders: Object.keys(subfolders),
+    });
+    await shareFolderWithEmails(accessToken, contractFolder.id, [shareWithEmail, googleEmail]);
 
     return {
       id_folder: contractFolder.id,
-      ten_folder: detail?.name || contractFolder.name || wantedName,
-      webViewLink: detail?.webViewLink || `https://drive.google.com/drive/folders/${contractFolder.id}`,
+      ten_folder: contractFolder.name || wantedName,
+      webViewLink: contractFolder.webViewLink || `https://drive.google.com/open?id=${contractFolder.id}`,
+      google_email: googleEmail,
+      subfolders: Object.keys(subfolders),
       created,
     };
   } catch (err) {

@@ -264,6 +264,7 @@ export default function HopDongForm({ mode, hopDongId, initialData, fromBaoGia, 
   const [moTaNoiDung, setMoTaNoiDung] = useState('');
   const [tenFolder, setTenFolder] = useState('');
   const [idFolder, setIdFolder] = useState('');
+  const [driveEmail, setDriveEmail] = useState('');
   const [creatingFolder, setCreatingFolder] = useState(false);
   const folderTouchedRef = useRef(false);
   const [trangThai, setTrangThai] = useState('Hieu luc');
@@ -369,6 +370,18 @@ export default function HopDongForm({ mode, hopDongId, initialData, fromBaoGia, 
     if (folderTouchedRef.current || idFolder) return;
     if (tenFolderGoiY) setTenFolder(tenFolderGoiY);
   }, [tenFolderGoiY, idFolder]);
+
+  useEffect(() => {
+    const token = localStorage.getItem('token');
+    fetch('/api/google-drive/status', {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (data?.connected && data.google_email) setDriveEmail(data.google_email);
+      })
+      .catch(() => {});
+  }, []);
 
   // Load bao gia when filter changes
   useEffect(() => {
@@ -728,11 +741,15 @@ export default function HopDongForm({ mode, hopDongId, initialData, fromBaoGia, 
       });
       if (result.data?.ten_folder_du_an) setTenFolder(result.data.ten_folder_du_an);
       if (result.data?.id_folder_du_an) setIdFolder(result.data.id_folder_du_an);
+      if (result.drive?.google_email) setDriveEmail(result.drive.google_email);
       if (result.drive_warning && !result.drive?.id_folder) {
         addToast('error', result.drive_warning);
         return;
       }
-      addToast('success', `Đã tạo thư mục Drive: ${result.drive?.ten_folder || result.data?.ten_folder_du_an}`);
+      addToast(
+        'success',
+        `Đã tạo thư mục Drive: ${result.drive?.ten_folder || result.data?.ten_folder_du_an} (BV, Đầu ra, Đầu vào)`,
+      );
     } catch (err) {
       addToast('error', err instanceof Error ? err.message : 'Không tạo được thư mục Drive');
     } finally {
@@ -810,6 +827,7 @@ export default function HopDongForm({ mode, hopDongId, initialData, fromBaoGia, 
         const result = await hopDongApi.create(payload);
         if (result.data?.ten_folder_du_an) setTenFolder(result.data.ten_folder_du_an);
         if (result.data?.id_folder_du_an) setIdFolder(result.data.id_folder_du_an);
+      if (result.drive?.google_email) setDriveEmail(result.drive.google_email);
         if (result.drive_warning) {
           addToast('warning', result.drive_warning);
         } else if (result.drive?.ten_folder) {
@@ -821,6 +839,7 @@ export default function HopDongForm({ mode, hopDongId, initialData, fromBaoGia, 
         const result = await hopDongApi.update(hopDongId!, payload);
         if (result.data?.ten_folder_du_an) setTenFolder(result.data.ten_folder_du_an);
         if (result.data?.id_folder_du_an) setIdFolder(result.data.id_folder_du_an);
+      if (result.drive?.google_email) setDriveEmail(result.drive.google_email);
         if (result.drive_warning) {
           addToast('warning', result.drive_warning);
         } else if (result.drive?.created && result.drive?.ten_folder) {
@@ -974,11 +993,11 @@ export default function HopDongForm({ mode, hopDongId, initialData, fromBaoGia, 
               />
               {idFolder ? (
                 <a
-                  href={driveFolderUrl(idFolder)}
+                  href={driveFolderUrl(idFolder, driveEmail)}
                   target="_blank"
                   rel="noreferrer"
                   className="h-10 shrink-0 px-3 border border-gray-200 rounded-lg text-xs font-semibold text-gray-600 hover:bg-gray-50 inline-flex items-center gap-1"
-                  title="Mở trên Google Drive"
+                  title={driveEmail ? `Mở bằng tài khoản ${driveEmail}` : 'Mở trên Google Drive'}
                 >
                   <ExternalLink className="w-3.5 h-3.5" />
                   Mở
@@ -995,6 +1014,7 @@ export default function HopDongForm({ mode, hopDongId, initialData, fromBaoGia, 
             </div>
             <p className="mt-1 text-[11px] text-gray-400">
               {namTuNgay(ngayHopDong)} / Hợp đồng / {tenFolder.trim() || tenFolderGoiY || '...'} / BV · Đầu ra · Đầu vào
+              {driveEmail ? ` · Drive: ${driveEmail}` : ''}
             </p>
           </EntityFormField>
 
