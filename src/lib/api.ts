@@ -59,10 +59,16 @@ export const baoGiaApi = {
     request<{ data: { so: string; nam: number } }>(`/bao-gia/so-tiep-theo${buildQuery({ nam })}`),
 
   create: (data: any) =>
-    request<{ data: any }>('/bao-gia', { method: 'POST', body: JSON.stringify(data) }),
+    request<{ data: any; drive?: any; drive_warning?: string | null }>('/bao-gia', { method: 'POST', body: JSON.stringify(data) }),
 
   update: (id: number, data: any) =>
-    request<{ data: any }>(`/bao-gia/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+    request<{ data: any; drive?: any; drive_warning?: string | null }>(`/bao-gia/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+
+  taoFolder: (id: number, data?: { ten_folder_du_an?: string }) =>
+    request<{ data: any; drive?: any; drive_warning?: string | null }>(
+      `/bao-gia/${id}/tao-folder`,
+      { method: 'POST', body: JSON.stringify(data || {}) }
+    ),
 
   delete: (id: number) =>
     request<{ success: boolean }>(`/bao-gia/${id}`, { method: 'DELETE' }),

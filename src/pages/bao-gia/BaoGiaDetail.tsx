@@ -16,6 +16,7 @@ import {
   applyVanChuyenToChiTiet,
   calcTongGiaVonCoVanChuyen,
   calcLoiNhuanGop,
+  driveFolderUrl,
 } from '../../lib/utils';
 import EntityInfoPanel from '../../components/shared/EntityInfoPanel';
 import BaoGiaForm from './BaoGiaForm';
@@ -50,10 +51,23 @@ export default function BaoGiaDetail() {
   const [cloning, setCloning] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [driveLink, setDriveLink] = useState<string | null>(null);
+  const [driveEmail, setDriveEmail] = useState('');
 
   useEffect(() => {
     if (id) fetchBaoGia();
   }, [id]);
+
+  useEffect(() => {
+    const token = localStorage.getItem('token');
+    fetch('/api/google-drive/status', {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (data?.connected && data.google_email) setDriveEmail(data.google_email);
+      })
+      .catch(() => {});
+  }, []);
 
   const cheDoVC = Number(baoGia?.che_do_van_chuyen ?? 1);
   const phiVC = Number(baoGia?.phi_van_chuyen || 0);
@@ -349,6 +363,22 @@ export default function BaoGiaDetail() {
                 { label: 'Mẫu BG', value: baoGia.mau_bao_gia || '--' },
                 { label: 'Chế độ VC', value: cheDoVanChuyenLabel(baoGia.che_do_van_chuyen) },
                 { label: 'Phí VC', value: formatVND(baoGia.phi_van_chuyen) },
+                {
+                  label: 'Thư mục Drive',
+                  value: baoGia.id_folder_du_an ? (
+                    <a
+                      href={driveFolderUrl(baoGia.id_folder_du_an, driveEmail)}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-sm font-semibold text-blue-700 hover:underline inline-flex items-center gap-1"
+                    >
+                      <HardDrive className="w-3.5 h-3.5" />
+                      {baoGia.ten_folder_du_an || 'Mở folder'}
+                    </a>
+                  ) : (
+                    <span className="text-gray-400">Chưa tạo</span>
+                  ),
+                },
                 {
                   label: 'Trạng thái',
                   value: baoGia.hop_dong_id ? (

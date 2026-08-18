@@ -608,6 +608,23 @@ export function buildTenFolderHopDong(soHopDong: string, tenKhachHang: string, t
   return stt;
 }
 
+/** Gợi ý tên folder báo giá (không gồm STT — STT lấy từ 2 số đầu folder Drive). */
+export function buildTenFolderBaoGia(tenKhachHang: string, tenDuAn: string): string {
+  let kh = String(tenKhachHang || '')
+    .replace(/[\\/:*?"<>|]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  kh = kh.replace(/^(công ty tnhh mtv|công ty tnhh|công ty cổ phần|công ty cp|công ty|cty tnhh|cty cp|cty)\s+/i, '');
+  const khWord = kh.split(' ').filter(Boolean)[0] || '';
+  const duAn = String(tenDuAn || '')
+    .replace(/[\\/:*?"<>|]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 40);
+  if (khWord && duAn) return `${khWord} - ${duAn}`;
+  return khWord || duAn || '';
+}
+
 export function driveFolderUrl(id?: string | null, googleEmail?: string | null): string {
   if (!id) return '';
   const folder = `https://drive.google.com/drive/folders/${encodeURIComponent(id)}`;

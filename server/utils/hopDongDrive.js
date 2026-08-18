@@ -86,7 +86,7 @@ function findFolderByStt(folders, stt) {
   return (folders || []).find((f) => new RegExp(`^${prefix}(?:\\s|$)`).test(String(f.name || '').trim()));
 }
 
-async function loadCache() {
+export async function loadCache() {
   try {
     const row = await queryOne('SELECT value FROM cau_hinh WHERE `key` = ?', [CACHE_KEY]);
     if (!row?.value) return {};
@@ -145,13 +145,14 @@ async function scorePhamGiaFolder(accessToken, folder) {
     if (n === foldDriveName('Hợp đồng')) score += 3;
     if (n.includes('cccl') || n.includes('cqcl')) score += 10;
     if (n.includes('cong no')) score += 10;
+    if (n.includes('bao gia')) score += 8;
     if (/^\d{4}$/.test(String(k.name || '').trim())) score += 1;
   }
   if (kids.length <= 15) score += 2;
   return score;
 }
 
-async function findPhamGiaRoot(accessToken, cache) {
+export async function findPhamGiaRoot(accessToken, cache) {
   const named = await findFoldersByNames(accessToken, PHAM_GIA_NAMES);
   const top = await listDirectItems(accessToken, 'root', 100, { strict: false });
   for (const f of top) {

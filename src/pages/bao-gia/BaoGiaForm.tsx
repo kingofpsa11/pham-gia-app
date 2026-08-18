@@ -20,8 +20,10 @@ import {
   parseTSV,
   isChiTietRowTrong,
   namTuNgay,
+  buildTenFolderBaoGia,
+  driveFolderUrl,
 } from '../../lib/utils';
-import { Save, Plus, Trash2, ClipboardPaste, FileSpreadsheet, RefreshCw, Search, X } from 'lucide-react';
+import { Save, Plus, Trash2, ClipboardPaste, FileSpreadsheet, RefreshCw, Search, X, ExternalLink } from 'lucide-react';
 import ChiTietSttCell from '../../components/shared/ChiTietSttCell';
 import LoiNhuanGopSummary from '../../components/shared/LoiNhuanGopSummary';
 import NumInput from '../../components/ui/NumInput';
@@ -96,6 +98,10 @@ export default function BaoGiaForm({ mode, baoGiaId, initialData, onSaved, onCan
   const [cheDoVanChuyen, setCheDoVanChuyen] = useState<number>(1);
   const [phiVanChuyen, setPhiVanChuyen] = useState(0);
   const [tenFolder, setTenFolder] = useState('');
+  const [idFolder, setIdFolder] = useState('');
+  const [driveEmail, setDriveEmail] = useState('');
+  const [creatingFolder, setCreatingFolder] = useState(false);
+  const folderTouchedRef = useRef(false);
 
   // KH search dropdown
   const [khSearch, setKhSearch] = useState('');
@@ -156,8 +162,8 @@ export default function BaoGiaForm({ mode, baoGiaId, initialData, onSaved, onCan
 
   function populateFromData(bg: BaoGia & { chi_tiet?: BaoGiaChiTiet[] }) {
     setKhachHangId(String(bg.khach_hang_id));
-    setKhachHangName((bg as any).ten_cong_ty || '');
-    setKhSearch((bg as any).ten_cong_ty || '');
+    setKhachHangName((bg as any).ten_cong_ty || (bg as any).khach_hang?.ten_cong_ty || '');
+    setKhSearch((bg as any).ten_cong_ty || (bg as any).khach_hang?.ten_cong_ty || '');
     setSoBaoGia(bg.so_bao_gia || '');
     setNgayBaoGia(isoToVN(bg.ngay_bao_gia as string));
     setTenDuAn(bg.ten_du_an || '');
@@ -166,9 +172,32 @@ export default function BaoGiaForm({ mode, baoGiaId, initialData, onSaved, onCan
     setCheDoVanChuyen(Number(bg.che_do_van_chuyen ?? 1));
     setPhiVanChuyen(Number(bg.phi_van_chuyen) || 0);
     setTenFolder((bg as any).ten_folder_du_an || '');
+    setIdFolder((bg as any).id_folder_du_an || '');
     const rows = ((bg.chi_tiet as BaoGiaChiTiet[]) || []).map(toChiTietRow);
     setChiTiet(rows.length > 0 ? rows : [emptyChiTiet()]);
   }
+
+  const tenFolderGoiY = useMemo(
+    () => buildTenFolderBaoGia(khachHangName, tenDuAn),
+    [khachHangName, tenDuAn]
+  );
+
+  useEffect(() => {
+    if (folderTouchedRef.current || idFolder) return;
+    if (tenFolderGoiY) setTenFolder(tenFolderGoiY);
+  }, [tenFolderGoiY, idFolder]);
+
+  useEffect(() => {
+    const token = localStorage.getItem('token');
+    fetch('/api/google-drive/status', {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (data?.connected && data.google_email) setDriveEmail(data.google_email);
+      })
+      .catch(() => {});
+  }, []);
 
 
   function insertRowBefore(beforeTempId: string) {
@@ -312,6 +341,34 @@ export default function BaoGiaForm({ mode, baoGiaId, initialData, onSaved, onCan
     .filter((r) => r.thue_suat === 10)
     .reduce((s, r) => s + calcVAT(calcThanhTienBan(r.so_luong, r.gia_ban_thuc_te), 10), 0);
 
+  async function handleTaoFolder() {
+    if (mode !== 'edit' || !baoGiaId) {
+      addToast('warning', 'Folder sẽ được tạo tự động khi bạn lưu báo giá.');
+      return;
+    }
+    setCreatingFolder(true);
+    try {
+      const result = await baoGiaApi.taoFolder(baoGiaId, {
+        ten_folder_du_an: tenFolder.trim() || undefined,
+      });
+      const folderId = result.data?.id_folder_du_an || result.drive?.id_folder || '';
+      if (result.data?.ten_folder_du_an || result.drive?.ten_folder) {
+        setTenFolder(result.data?.ten_folder_du_an || result.drive?.ten_folder || tenFolder);
+      }
+      if (folderId) setIdFolder(folderId);
+      if (result.drive?.google_email) setDriveEmail(result.drive.google_email);
+      if (result.drive_warning && !result.drive?.id_folder) {
+        addToast('error', result.drive_warning);
+        return;
+      }
+      addToast('success', `Đã tạo thư mục Drive: ${result.drive?.ten_folder || result.data?.ten_folder_du_an}`);
+    } catch (err) {
+      addToast('error', err instanceof Error ? err.message : 'Không tạo được thư mục Drive');
+    } finally {
+      setCreatingFolder(false);
+    }
+  }
+
   async function handleSave() {
     if (!khachHangId) { addToast('warning', 'Vui lòng chọn khách hàng'); return; }
     if (!soBaoGia.trim()) { addToast('warning', 'Vui lòng nhập số báo giá'); return; }
@@ -353,6 +410,7 @@ export default function BaoGiaForm({ mode, baoGiaId, initialData, onSaved, onCan
         che_do_van_chuyen: cheDoVanChuyen,
         phi_van_chuyen: phiVCNum,
         ten_folder_du_an: tenFolder.trim() || null,
+        id_folder_du_an: idFolder || null,
         chi_tiet: validWithVC.map((r) => {
           const vcRow = withVCItems.find((x) => x.tempId === r.tempId) ?? r;
           return {
@@ -371,10 +429,26 @@ export default function BaoGiaForm({ mode, baoGiaId, initialData, onSaved, onCan
 
       if (mode === 'create') {
         const result = await baoGiaApi.create(payload);
+        if (result.data?.ten_folder_du_an) setTenFolder(result.data.ten_folder_du_an);
+        if (result.data?.id_folder_du_an) setIdFolder(result.data.id_folder_du_an);
+        if (result.drive?.google_email) setDriveEmail(result.drive.google_email);
+        if (result.drive_warning) {
+          addToast('warning', result.drive_warning);
+        } else if (result.drive?.ten_folder) {
+          addToast('success', `Đã tạo thư mục Drive: ${result.drive.ten_folder}`);
+        }
         addToast('success', 'Tạo báo giá thành công');
         onSaved(result.data.id);
       } else {
-        await baoGiaApi.update(baoGiaId!, payload);
+        const result = await baoGiaApi.update(baoGiaId!, payload);
+        if (result.data?.ten_folder_du_an) setTenFolder(result.data.ten_folder_du_an);
+        if (result.data?.id_folder_du_an) setIdFolder(result.data.id_folder_du_an);
+        if (result.drive?.google_email) setDriveEmail(result.drive.google_email);
+        if (result.drive_warning) {
+          addToast('warning', result.drive_warning);
+        } else if (result.drive?.created && result.drive?.ten_folder) {
+          addToast('success', `Đã tạo thư mục Drive: ${result.drive.ten_folder}`);
+        }
         addToast('success', 'Cập nhật báo giá thành công');
         onSaved(baoGiaId!);
       }
@@ -482,22 +556,43 @@ export default function BaoGiaForm({ mode, baoGiaId, initialData, onSaved, onCan
         </EntityFormMetaRow>
 
         <EntityFormMetaRow>
-          <EntityFormField label="Thư mục dự án" className="sm:col-span-2 lg:col-span-4">
+          <EntityFormField label="Thư mục Drive" className="sm:col-span-2 lg:col-span-4">
             <div className="flex gap-2">
               <input
                 type="text"
                 value={tenFolder}
-                onChange={(e) => setTenFolder(e.target.value)}
+                onChange={(e) => {
+                  folderTouchedRef.current = true;
+                  setTenFolder(e.target.value);
+                }}
                 className="input-field text-sm flex-1 min-w-0"
-                placeholder="Tên folder..."
+                placeholder={tenFolderGoiY || 'Tên folder...'}
               />
+              {idFolder && !creatingFolder ? (
+                <a
+                  href={driveFolderUrl(idFolder, driveEmail)}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="h-10 shrink-0 px-3 border border-gray-200 rounded-lg text-xs font-semibold text-gray-600 hover:bg-gray-50 inline-flex items-center gap-1"
+                  title={driveEmail ? `Mở bằng tài khoản ${driveEmail}` : 'Mở trên Google Drive'}
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  Mở
+                </a>
+              ) : null}
               <button
                 type="button"
-                className="h-10 shrink-0 px-4 bg-primary-600 text-white rounded-lg text-xs font-semibold hover:bg-primary-700 transition-colors"
+                onClick={handleTaoFolder}
+                disabled={creatingFolder}
+                className="h-10 shrink-0 px-4 bg-primary-600 text-white rounded-lg text-xs font-semibold hover:bg-primary-700 transition-colors disabled:opacity-60"
               >
-                Tạo
+                {creatingFolder ? 'Đang tạo...' : idFolder ? 'Tạo lại' : 'Tạo'}
               </button>
             </div>
+            <p className="mt-1 text-[11px] text-gray-400">
+              00 Phạm Gia / 00 Báo giá / {namTuNgay(ngayBaoGia)} / STT 2 số từ folder Drive / {tenFolder.trim() || tenFolderGoiY || '...'}
+              {driveEmail ? ` · Drive: ${driveEmail}` : ''}
+            </p>
           </EntityFormField>
 
           <EntityFormField label="Chế độ vận chuyển" className="sm:col-span-1 lg:col-span-3">

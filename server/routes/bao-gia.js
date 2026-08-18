@@ -9,11 +9,60 @@ import {
   messageBaoGiaTrung,
 } from '../utils/soTrungNam.js';
 import { nextSoChungTu, nextSoHopDongBan } from '../utils/soChungTu.js';
+import { optionalAuth } from '../middleware/auth.js';
+import { ensureBaoGiaDriveFolders } from '../utils/baoGiaDrive.js';
 
 const router = Router();
+router.use(optionalAuth);
 
 function insertId(result) {
   return Number(result?.insertId ?? result?.[0]?.insertId);
+}
+
+const BG_JOIN_SELECT = `
+  SELECT bg.*, kh.ten_cong_ty
+  FROM bao_gia bg
+  LEFT JOIN khach_hang kh ON bg.khach_hang_id = kh.id
+`;
+
+async function loadBaoGiaJoined(id) {
+  return queryOne(`${BG_JOIN_SELECT} WHERE bg.id = ?`, [id]);
+}
+
+async function attachDriveFolders(req, baoGiaId, { forceNew = false } = {}) {
+  try {
+    const row = await loadBaoGiaJoined(baoGiaId);
+    if (!row) return { data: null };
+    const drive = await ensureBaoGiaDriveFolders({
+      userId: req.user?.id,
+      baoGia: row,
+      tenKhachHang: row.ten_cong_ty || '',
+      shareWithEmail: req.user?.email || '',
+      forceNew,
+    });
+    if (drive?.id_folder) {
+      await query(
+        'UPDATE bao_gia SET ten_folder_du_an = ?, id_folder_du_an = ? WHERE id = ?',
+        [drive.ten_folder || '', drive.id_folder, baoGiaId],
+      );
+      const saved = await loadBaoGiaJoined(baoGiaId);
+      if (saved) {
+        row.ten_folder_du_an = saved.ten_folder_du_an;
+        row.id_folder_du_an = saved.id_folder_du_an;
+      } else {
+        row.ten_folder_du_an = drive.ten_folder || '';
+        row.id_folder_du_an = drive.id_folder;
+      }
+    }
+    return { data: row, drive, warning: drive?.warning || null };
+  } catch (err) {
+    console.error('attachBaoGiaDriveFolders:', err.message || err);
+    const row = await loadBaoGiaJoined(baoGiaId);
+    return {
+      data: row || null,
+      warning: err.message || 'Không tạo được thư mục Google Drive',
+    };
+  }
 }
 
 router.get('/bao-gia', async (req, res) => {
@@ -189,8 +238,12 @@ router.post('/bao-gia', async (req, res) => {
       }
     }
 
-    const newRow = await queryOne('SELECT * FROM bao_gia WHERE id = ?', [baoGiaId]);
-    return res.json({ data: newRow });
+    const attached = await attachDriveFolders(req, baoGiaId);
+    return res.json({
+      data: attached.data || { id: baoGiaId },
+      drive: attached.drive || null,
+      drive_warning: attached.warning || null,
+    });
   } catch (err) {
     console.error('POST /api/bao-gia error:', err.message);
     return res.status(500).json({ error: 'Không thể tạo báo giá', message: err.message });
@@ -201,11 +254,19 @@ router.put('/bao-gia/:id', async (req, res) => {
   try {
     const id = req.params.id;
     const body = req.body;
+    const existing = await queryOne('SELECT * FROM bao_gia WHERE id = ?', [id]);
+    if (!existing) return res.status(404).json({ error: 'Not found' });
     const nam = parseNamFromDate(body.ngay_bao_gia);
     const dup = await findBaoGiaTrungSo(queryOne, body.so_bao_gia, nam, Number(id));
     if (dup) {
       return res.status(409).json({ error: messageBaoGiaTrung(String(body.so_bao_gia).trim(), nam) });
     }
+    const tenFolder = body.ten_folder_du_an !== undefined
+      ? (body.ten_folder_du_an || '')
+      : (existing.ten_folder_du_an || '');
+    const idFolder = body.id_folder_du_an !== undefined
+      ? (body.id_folder_du_an || '')
+      : (existing.id_folder_du_an || '');
     await query(
       `UPDATE bao_gia SET so_bao_gia=?, ngay_bao_gia=?, khach_hang_id=?, ten_du_an=?, phien_ban=?, mau_bao_gia=?, che_do_van_chuyen=?, phi_van_chuyen=?, ten_folder_du_an=?, id_folder_du_an=?, hop_dong_id=? WHERE id=?`,
       [
@@ -217,9 +278,9 @@ router.put('/bao-gia/:id', async (req, res) => {
         body.mau_bao_gia || 'Hapulico',
         body.che_do_van_chuyen || 0,
         body.phi_van_chuyen || 0,
-        body.ten_folder_du_an || '',
-        body.id_folder_du_an || '',
-        body.hop_dong_id || null,
+        tenFolder,
+        idFolder,
+        body.hop_dong_id !== undefined ? (body.hop_dong_id || null) : existing.hop_dong_id,
         id,
       ]
     );
@@ -249,11 +310,39 @@ router.put('/bao-gia/:id', async (req, res) => {
       }
     }
 
-    const updated = await queryOne('SELECT * FROM bao_gia WHERE id = ?', [id]);
-    return res.json({ data: updated });
+    const attached = await attachDriveFolders(req, id);
+    return res.json({
+      data: attached.data || await loadBaoGiaJoined(id),
+      drive: attached.drive || null,
+      drive_warning: attached.warning || null,
+    });
   } catch (err) {
     console.error('PUT /api/bao-gia/:id error:', err.message);
     return res.status(500).json({ error: 'Không thể cập nhật báo giá', message: err.message });
+  }
+});
+
+router.post('/bao-gia/:id/tao-folder', async (req, res) => {
+  try {
+    const id = req.params.id;
+    const existing = await queryOne('SELECT id FROM bao_gia WHERE id = ?', [id]);
+    if (!existing) return res.status(404).json({ error: 'Not found' });
+    const tenFolder = String(req.body?.ten_folder_du_an || '').trim();
+    if (tenFolder) {
+      await query('UPDATE bao_gia SET ten_folder_du_an = ? WHERE id = ?', [tenFolder, id]);
+    }
+    const attached = await attachDriveFolders(req, id, { forceNew: true });
+    if (!attached.data) return res.status(404).json({ error: 'Not found' });
+    if (attached.warning && !attached.drive?.id_folder) {
+      return res.status(400).json({ error: attached.warning, drive_warning: attached.warning });
+    }
+    return res.json({
+      data: attached.data,
+      drive: attached.drive || null,
+      drive_warning: attached.warning || null,
+    });
+  } catch (err) {
+    return dbErrorResponse(res, err, 'Không thể tạo thư mục Google Drive');
   }
 });
 
@@ -277,7 +366,7 @@ router.post('/clone-bao-gia', async (req, res) => {
         bg.che_do_van_chuyen,
         bg.phi_van_chuyen,
         bg.ten_folder_du_an,
-        bg.id_folder_du_an,
+        '',
       ]
     );
     const newBaoGiaId = insertId(result);
