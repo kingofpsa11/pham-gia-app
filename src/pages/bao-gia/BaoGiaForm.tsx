@@ -22,6 +22,8 @@ import {
   namTuNgay,
   buildTenFolderBaoGia,
   driveFolderUrl,
+  sttFromFolderName,
+  isDriveSttOnlyName,
 } from '../../lib/utils';
 import { Save, Plus, Trash2, ClipboardPaste, FileSpreadsheet, RefreshCw, Search, X, ExternalLink } from 'lucide-react';
 import ChiTietSttCell from '../../components/shared/ChiTietSttCell';
@@ -102,6 +104,7 @@ export default function BaoGiaForm({ mode, baoGiaId, initialData, onSaved, onCan
   const [driveEmail, setDriveEmail] = useState('');
   const [creatingFolder, setCreatingFolder] = useState(false);
   const folderTouchedRef = useRef(false);
+  const folderSttRef = useRef('');
 
   // KH search dropdown
   const [khSearch, setKhSearch] = useState('');
@@ -171,19 +174,26 @@ export default function BaoGiaForm({ mode, baoGiaId, initialData, onSaved, onCan
     setMauBaoGia(bg.mau_bao_gia || 'Hapulico');
     setCheDoVanChuyen(Number(bg.che_do_van_chuyen ?? 1));
     setPhiVanChuyen(Number(bg.phi_van_chuyen) || 0);
-    setTenFolder((bg as any).ten_folder_du_an || '');
+    const storedFolder = String((bg as any).ten_folder_du_an || '').trim();
+    const khName = (bg as any).ten_cong_ty || (bg as any).khach_hang?.ten_cong_ty || '';
+    const stt = sttFromFolderName(storedFolder)
+      || (isDriveSttOnlyName(storedFolder) ? storedFolder.padStart(2, '0') : '');
+    folderSttRef.current = stt;
+    const rebuilt = buildTenFolderBaoGia(khName, bg.ten_du_an || '', stt);
+    setTenFolder(!storedFolder || isDriveSttOnlyName(storedFolder) ? (rebuilt || storedFolder) : storedFolder);
     setIdFolder((bg as any).id_folder_du_an || '');
     const rows = ((bg.chi_tiet as BaoGiaChiTiet[]) || []).map(toChiTietRow);
     setChiTiet(rows.length > 0 ? rows : [emptyChiTiet()]);
   }
 
   const tenFolderGoiY = useMemo(
-    () => buildTenFolderBaoGia(khachHangName, tenDuAn),
+    () => buildTenFolderBaoGia(khachHangName, tenDuAn, folderSttRef.current || undefined),
     [khachHangName, tenDuAn]
   );
 
   useEffect(() => {
-    if (folderTouchedRef.current || idFolder) return;
+    if (folderTouchedRef.current) return;
+    if (idFolder && tenFolder && !isDriveSttOnlyName(tenFolder)) return;
     if (tenFolderGoiY) setTenFolder(tenFolderGoiY);
   }, [tenFolderGoiY, idFolder]);
 

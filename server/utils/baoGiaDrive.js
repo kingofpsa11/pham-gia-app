@@ -59,6 +59,17 @@ function applySttToName(name, stt) {
   return rest ? `${sttStr} ${rest}` : sttStr;
 }
 
+function nameLooksIncomplete(name) {
+  return !String(name || '').trim() || /^\d{1,2}$/.test(String(name).trim());
+}
+
+function resolveQuoteFolderName(customName, tenKhachHang, tenDuAn, stt) {
+  const built = buildTenFolderBaoGia(tenKhachHang, tenDuAn, stt);
+  const cleaned = sanitizeDriveName(customName);
+  if (nameLooksIncomplete(cleaned)) return built;
+  return applySttToName(cleaned, stt);
+}
+
 function looksLikeBaoGiaRootName(name) {
   const n = foldDriveName(name);
   return n === foldDriveName(BAO_GIA_DIR)
@@ -278,9 +289,14 @@ export async function ensureBaoGiaDriveFolders({ userId, baoGia, tenKhachHang, s
     if (existingId) {
       const current = await getDriveFile(accessToken, existingId);
       if (isDriveFolder(current)) {
-        if (customName && customName !== current.name) {
-          await renameDriveFile(accessToken, current.id, customName);
-          current.name = customName;
+        const stt = folderSttFromName(current.name) ?? folderSttFromName(customName) ?? 0;
+        const wanted = resolveQuoteFolderName(customName, tenKhachHang, baoGia.ten_du_an, stt);
+        const shouldRename = wanted
+          && wanted !== current.name
+          && (nameLooksIncomplete(current.name) || !nameLooksIncomplete(customName));
+        if (shouldRename) {
+          await renameDriveFile(accessToken, current.id, wanted);
+          current.name = wanted;
         }
         const subfolders = await ensureSubfolders(accessToken, current.id);
         await shareFolderWithEmails(accessToken, current.id, [shareWithEmail, googleEmail]);
@@ -308,9 +324,7 @@ export async function ensureBaoGiaDriveFolders({ userId, baoGia, tenKhachHang, s
 
     const siblings = await listQuoteFolders(accessToken, yearFolder.id);
     const stt = nextSttFromFolders(siblings);
-    const wantedName = customName
-      ? applySttToName(customName, stt)
-      : buildTenFolderBaoGia(tenKhachHang, baoGia.ten_du_an, stt);
+    const wantedName = resolveQuoteFolderName(customName, tenKhachHang, baoGia.ten_du_an, stt);
 
     const quoteFolder = await createDriveFolder(accessToken, wantedName, yearFolder.id);
     if (!isDriveFolder(quoteFolder)) {

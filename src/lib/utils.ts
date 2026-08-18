@@ -608,8 +608,21 @@ export function buildTenFolderHopDong(soHopDong: string, tenKhachHang: string, t
   return stt;
 }
 
-/** Gợi ý tên folder báo giá (không gồm STT — STT lấy từ 2 số đầu folder Drive). */
-export function buildTenFolderBaoGia(tenKhachHang: string, tenDuAn: string): string {
+/** Gợi ý tên folder báo giá. STT (nếu có) lấy từ folder Drive, không lấy từ số báo giá. */
+export function sttFromFolderName(name?: string | null): string {
+  const m = String(name || '').trim().match(/^(\d{2})(?:\s|$|-)/);
+  return m ? m[1] : '';
+}
+
+export function isDriveSttOnlyName(name?: string | null): boolean {
+  return /^\d{1,2}$/.test(String(name || '').trim());
+}
+
+export function buildTenFolderBaoGia(
+  tenKhachHang: string,
+  tenDuAn: string,
+  stt?: string | number | null,
+): string {
   let kh = String(tenKhachHang || '')
     .replace(/[\\/:*?"<>|]/g, ' ')
     .replace(/\s+/g, ' ')
@@ -621,8 +634,14 @@ export function buildTenFolderBaoGia(tenKhachHang: string, tenDuAn: string): str
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 40);
-  if (khWord && duAn) return `${khWord} - ${duAn}`;
-  return khWord || duAn || '';
+  const rest = khWord && duAn ? `${khWord} - ${duAn}` : (khWord || duAn || '');
+  const sttRaw = String(stt ?? '').trim();
+  const sttStr = sttRaw !== '' && /^\d+$/.test(sttRaw)
+    ? String(parseInt(sttRaw, 10)).padStart(2, '0')
+    : '';
+  if (sttStr && rest) return `${sttStr} ${rest}`;
+  if (sttStr) return sttStr;
+  return rest;
 }
 
 export function driveFolderUrl(id?: string | null, googleEmail?: string | null): string {

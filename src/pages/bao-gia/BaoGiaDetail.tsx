@@ -17,6 +17,9 @@ import {
   calcTongGiaVonCoVanChuyen,
   calcLoiNhuanGop,
   driveFolderUrl,
+  buildTenFolderBaoGia,
+  sttFromFolderName,
+  isDriveSttOnlyName,
 } from '../../lib/utils';
 import EntityInfoPanel from '../../components/shared/EntityInfoPanel';
 import BaoGiaForm from './BaoGiaForm';
@@ -257,6 +260,17 @@ export default function BaoGiaDetail() {
 
   if (!baoGia) return null;
 
+  const storedFolderName = String(baoGia.ten_folder_du_an || '').trim();
+  const folderStt = sttFromFolderName(storedFolderName)
+    || (isDriveSttOnlyName(storedFolderName) ? storedFolderName.padStart(2, '0') : '');
+  const tenFolderHienThi = !storedFolderName || isDriveSttOnlyName(storedFolderName)
+    ? (buildTenFolderBaoGia(
+        baoGia.khach_hang?.ten_cong_ty || (baoGia as any).ten_cong_ty || '',
+        baoGia.ten_du_an || '',
+        folderStt,
+      ) || storedFolderName || 'Mở folder')
+    : storedFolderName;
+
   const tongGiaVonThuan = calcItems.reduce((s, item) => {
     const sl = typeof item.so_luong === 'string' ? parseFloat(item.so_luong) || 0 : (item.so_luong ?? 0);
     const gv = typeof item.don_gia_von === 'string' ? parseFloat(item.don_gia_von) || 0 : (item.don_gia_von ?? 0);
@@ -373,7 +387,7 @@ export default function BaoGiaDetail() {
                       className="text-sm font-semibold text-blue-700 hover:underline inline-flex items-center gap-1"
                     >
                       <HardDrive className="w-3.5 h-3.5" />
-                      {baoGia.ten_folder_du_an || 'Mở folder'}
+                      {tenFolderHienThi}
                     </a>
                   ) : (
                     <span className="text-gray-400">Chưa tạo</span>
