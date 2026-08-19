@@ -7,10 +7,8 @@ import {
   getDriveFile,
   listChildFolders,
   listDirectItems,
-  findAllFoldersNamed,
   findFoldersByNames,
   resolveToFolder,
-  moveToParent,
   ensureChildFolder,
   createDriveFolder,
   renameDriveFile,
@@ -81,9 +79,8 @@ function folderStt(name) {
   return m ? parseInt(m[1], 10) : null;
 }
 
-function findFolderByStt(folders, stt) {
-  const prefix = String(stt).padStart(2, '0');
-  return (folders || []).find((f) => new RegExp(`^${prefix}(?:\\s|$)`).test(String(f.name || '').trim()));
+export function findExistingContractFolder(folders, wantedName) {
+  return (folders || []).find((f) => f.name === wantedName) || null;
 }
 
 export async function loadCache() {
@@ -206,22 +203,6 @@ async function ensureYearFolder(accessToken, nam, cache) {
     return yearHere;
   }
 
-  const named = await findAllFoldersNamed(accessToken, yearName, 50);
-  if (named.length) {
-    const underRoot = named.filter((f) => (f.parents || []).includes(root.id));
-    const oldest = [...named].sort((a, b) =>
-      String(a.createdTime || '').localeCompare(String(b.createdTime || '')),
-    )[0];
-    let yearFolder = underRoot[0] || oldest;
-    const moved = await moveToParent(accessToken, yearFolder.id, root.id);
-    if (isDriveFolder(moved)) yearFolder = moved;
-    cache.years[yearName] = { id: yearFolder.id, parentId: root.id };
-    cache.rootId = root.id;
-    await saveCache(cache);
-    console.log('Drive year folder moved/reused:', { yearId: yearFolder.id, found: named.length });
-    return yearFolder;
-  }
-
   const yearFolder = await createDriveFolder(accessToken, yearName, root.id);
   if (!isDriveFolder(yearFolder) || !driveNamesEqual(yearFolder.name, yearName)) {
     const err = new Error(`Không tạo được thư mục năm ${yearName} trong "00 Phạm Gia"`);
@@ -313,7 +294,7 @@ export async function ensureHopDongDriveFolders({ userId, hopDong, tenKhachHang,
   const googleEmail = tokenRow?.google_email || '';
 
   try {
-    const existingId = forceNew ? '' : String(hopDong.id_folder_du_an || '').trim();
+    const existingId = String(hopDong.id_folder_du_an || '').trim();
     const customName = sanitizeDriveName(hopDong.ten_folder_du_an);
     if (existingId) {
       const current = await getDriveFile(accessToken, existingId);
@@ -376,16 +357,12 @@ export async function ensureHopDongDriveFolders({ userId, hopDong, tenKhachHang,
     let contractFolder;
     let created = false;
     if (forceNew) {
-      contractFolder = await createDriveFolder(accessToken, wantedName, hopDongRoot.id);
-      created = true;
-    } else {
-      const exact = (siblings || []).find((f) => f.name === wantedName);
-      const existingByStt = customName ? null : findFolderByStt(siblings, stt);
-      contractFolder = exact || existingByStt;
-      if (!contractFolder) {
-        contractFolder = await ensureChildFolder(accessToken, hopDongRoot.id, wantedName, { fallbackRoot: false });
-        created = !!contractFolder.created;
-      }
+      console.log('Drive hop-dong forceNew ignored; repairing/reusing folder when possible');
+    }
+    contractFolder = findExistingContractFolder(siblings, wantedName);
+    if (!contractFolder) {
+      contractFolder = await ensureChildFolder(accessToken, hopDongRoot.id, wantedName, { fallbackRoot: false });
+      created = !!contractFolder.created;
     }
 
     if (!isDriveFolder(contractFolder)) {
