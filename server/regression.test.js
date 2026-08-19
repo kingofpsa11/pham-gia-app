@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import jwt from 'jsonwebtoken';
 import { app } from './index.js';
 import { DEFAULT_JWT_SECRET, getJwtSecret } from './utils/jwtSecret.js';
+import { findExistingContractFolder } from './utils/hopDongDrive.js';
 import { mergeMissingFields } from './utils/patchMerge.js';
 
 async function request(path, options = {}) {
@@ -95,4 +96,14 @@ test('patch merge preserves omitted persisted fields only', () => {
   assert.equal(merged.nguoi_tao, '');
   assert.equal(merged.gia_tri_ghi_no, 125000);
   assert.equal(getJwtSecret(), process.env.JWT_SECRET || DEFAULT_JWT_SECRET);
+});
+
+test('contract Drive folder lookup does not reuse STT-only matches', () => {
+  const folders = [
+    { id: 'old', name: '01 Old Customer - Old Project' },
+    { id: 'exact', name: '01 New Customer - New Project' },
+  ];
+
+  assert.equal(findExistingContractFolder(folders, '01 Missing Customer - Missing Project'), null);
+  assert.equal(findExistingContractFolder(folders, '01 New Customer - New Project')?.id, 'exact');
 });
