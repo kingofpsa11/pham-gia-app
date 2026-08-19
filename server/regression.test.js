@@ -10,6 +10,7 @@ const { default: app } = await import('./index.js');
 const { verifyToken } = await import('./middleware/auth.js');
 const { DEFAULT_JWT_SECRET } = await import('./utils/jwtSecret.js');
 const { buildDongTienUpdateValues } = await import('./routes/dong-tien-moi.js');
+const { findExistingContractFolder } = await import('./utils/hopDongDrive.js');
 
 async function request(path, options = {}) {
   const server = app.listen(0);
@@ -117,4 +118,14 @@ test('cashflow update values preserve omitted financial fields and existing time
   assert.equal(values[17], 'BANK-123');
   assert.equal(values[18], null);
   assert.equal(values[20], 42);
+});
+
+test('contract Drive folder lookup does not reuse STT-only matches', () => {
+  const folders = [
+    { id: 'old', name: '01 Old Customer - Old Project' },
+    { id: 'exact', name: '01 New Customer - New Project' },
+  ];
+
+  assert.equal(findExistingContractFolder(folders, '01 Missing Customer - Missing Project'), null);
+  assert.equal(findExistingContractFolder(folders, '01 New Customer - New Project')?.id, 'exact');
 });
