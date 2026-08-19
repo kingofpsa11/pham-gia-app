@@ -5,6 +5,7 @@ import app from './index.js';
 import { parseNgayGiaoDich, parseNgayHachToan, preserveDateOnlyTime } from './utils/dongTienDate.js';
 import { DEFAULT_JWT_SECRET, getJwtSecret } from './utils/jwtSecret.js';
 import { patchNullable, patchString, patchValue } from './utils/patchMerge.js';
+import { findExistingContractFolder } from './utils/hopDongDrive.js';
 
 let server;
 let baseUrl;
@@ -135,4 +136,14 @@ describe('cashflow date preservation', () => {
       '2026-08-05 14:15:16',
     );
   });
+});
+
+test('contract Drive folder lookup does not reuse STT-only matches', () => {
+  const folders = [
+    { id: 'old', name: '01 Old Customer - Old Project' },
+    { id: 'exact', name: '01 New Customer - New Project' },
+  ];
+
+  assert.equal(findExistingContractFolder(folders, '01 Missing Customer - Missing Project'), null);
+  assert.equal(findExistingContractFolder(folders, '01 New Customer - New Project')?.id, 'exact');
 });
