@@ -247,7 +247,8 @@ async function ensureSubfolders(accessToken, parentId) {
     err.status = 400;
     throw err;
   }
-  const existing = await listChildFolders(accessToken, parentId);
+  const existing = (await listChildFolders(accessToken, parentId))
+    .filter((f) => isDriveFolder(f) && (f.parents || []).includes(parentId));
   const ids = {};
   const failed = [];
   for (const name of SUBFOLDERS) {

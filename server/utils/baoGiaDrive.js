@@ -13,6 +13,7 @@ import {
   createDriveFolder,
   renameDriveFile,
   shareDriveFile,
+  moveToParent,
   isDriveFolder,
   driveNamesEqual,
   foldDriveName,
@@ -214,40 +215,60 @@ async function listQuoteFolders(accessToken, yearFolderId) {
   const map = new Map();
   for (const f of [...direct, ...children]) {
     if (!f?.id) continue;
-    if (isDriveFolder(f)) {
+    if (isDriveFolder(f) && (f.parents || []).includes(yearFolderId)) {
       map.set(f.id, f);
       continue;
     }
     const folder = await resolveToFolder(accessToken, f);
-    if (isDriveFolder(folder)) map.set(folder.id, folder);
+    if (isDriveFolder(folder) && (folder.parents || []).includes(yearFolderId)) {
+      map.set(folder.id, folder);
+    }
   }
   return [...map.values()];
 }
 
-async function ensureSubfolders(accessToken, parentId) {
-  const parent = await getDriveFile(accessToken, parentId, 'id,name,mimeType,trashed');
+async function placeFolderInParent(accessToken, folder, parentId) {
+  if (!isDriveFolder(folder) || !parentId) return folder;
+  if ((folder.parents || []).includes(parentId)) return folder;
+  const fresh = await getDriveFile(accessToken, folder.id, 'id,name,mimeType,parents,webViewLink,trashed');
+  if (isDriveFolder(fresh) && (fresh.parents || []).includes(parentId)) return fresh;
+  const moved = await moveToParent(accessToken, folder.id, parentId);
+  return isDriveFolder(moved) ? moved : (fresh || folder);
+}
+
+async function ensureSubfolders(accessToken, parentId, { forceCreate = false } = {}) {
+  const parent = await getDriveFile(accessToken, parentId, 'id,name,mimeType,trashed,parents');
   if (!isDriveFolder(parent)) {
     const err = new Error('Không tạo được thư mục con vì thư mục báo giá không hợp lệ');
     err.status = 400;
     throw err;
   }
-  const existing = await listChildFolders(accessToken, parentId);
+  const listed = forceCreate ? [] : await listDirectItems(accessToken, parentId, 30);
+  const verified = (listed || []).filter(
+    (f) => isDriveFolder(f) && (f.parents || []).includes(parentId),
+  );
   const ids = {};
   const failed = [];
   for (const name of SUBFOLDERS) {
     try {
-      const found = existing.find((f) => driveNamesEqual(f.name, name));
-      if (isDriveFolder(found) && driveNamesEqual(found.name, name)) {
+      const found = verified.find((f) => driveNamesEqual(f.name, name));
+      if (found) {
         ids[name] = found.id;
         continue;
       }
-      const created = await createDriveFolder(accessToken, name, parentId);
+      let created = await createDriveFolder(accessToken, name, parentId);
+      created = await placeFolderInParent(accessToken, created, parentId);
+      if (!isDriveFolder(created)) {
+        failed.push(`${name}: không tạo được`);
+        continue;
+      }
       if (created.parents?.length && !created.parents.includes(parentId)) {
         failed.push(`${name}: tạo sai vị trí`);
         continue;
       }
       ids[name] = created.id;
-      existing.push(created);
+      verified.push(created);
+      console.log('Drive bao-gia subfolder created:', { name, id: created.id, parentId });
     } catch (err) {
       console.error('ensureBaoGiaSubfolder failed:', name, err.message || err);
       failed.push(`${name}: ${err.message || 'lỗi'}`);
@@ -333,7 +354,14 @@ export async function ensureBaoGiaDriveFolders({ userId, baoGia, tenKhachHang, s
       throw err;
     }
 
-    const subfolders = await ensureSubfolders(accessToken, quoteFolder.id);
+    let subfolders = {};
+    let subWarning = '';
+    try {
+      subfolders = await ensureSubfolders(accessToken, quoteFolder.id, { forceCreate: true });
+    } catch (subErr) {
+      console.error('ensureBaoGiaDriveFolders subfolders:', subErr.message || subErr);
+      subWarning = permissionHint(subErr);
+    }
     console.log('Drive bao-gia tree:', {
       baoGiaRootId: baoGiaRoot.id,
       year: yearFolder.name,
@@ -352,6 +380,7 @@ export async function ensureBaoGiaDriveFolders({ userId, baoGia, tenKhachHang, s
       google_email: googleEmail,
       subfolders: Object.keys(subfolders),
       created: true,
+      warning: subWarning || undefined,
     };
   } catch (err) {
     console.error('ensureBaoGiaDriveFolders:', err.message || err);
