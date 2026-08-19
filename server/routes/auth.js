@@ -3,6 +3,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { query } from '../db.js';
 import { findUserTable, getUserColumns, pickColumn } from '../utils/userTable.js';
+import { getJwtSecret } from '../utils/jwtSecret.js';
 
 const router = Router();
 
@@ -68,7 +69,7 @@ router.post('/login', async (req, res) => {
 
     const token = jwt.sign(
       { id: userId, email, role },
-      process.env.JWT_SECRET || 'phamgia_jwt_secret_change_this_2026',
+      getJwtSecret(),
       { expiresIn: '7d' }
     );
 
