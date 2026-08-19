@@ -217,8 +217,9 @@ function driveEscape(value) {
   return String(value || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 }
 
-export async function driveApi(accessToken, path, { method = 'GET', query: qs, body } = {}) {
-  const url = new URL(`https://www.googleapis.com/drive/v3/${path.replace(/^\//, '')}`);
+export async function driveApi(accessToken, path, { method = 'GET', query: qs, body, apiVersion = 'v3' } = {}) {
+  const version = apiVersion === 'v2' ? 'v2' : 'v3';
+  const url = new URL(`https://www.googleapis.com/drive/${version}/${path.replace(/^\//, '')}`);
   if (qs) {
     for (const [k, v] of Object.entries(qs)) {
       if (v != null && v !== '') url.searchParams.set(k, String(v));
@@ -445,10 +446,14 @@ export async function moveToParent(accessToken, fileId, parentId) {
     return getDriveFile(accessToken, fileId);
   }
   try {
+    const current = await getDriveFile(accessToken, fileId, 'id,name,mimeType,parents,webViewLink,trashed');
+    const oldParents = current?.parents || [];
+    const removeParents = oldParents.filter((p) => p !== parentId);
     return await driveApi(accessToken, `files/${fileId}`, {
       method: 'PATCH',
       qs: {
         addParents: parentId,
+        ...(removeParents.length ? { removeParents: removeParents.join(',') } : {}),
         supportsAllDrives: 'true',
         fields: 'id,name,mimeType,parents,webViewLink,trashed,createdTime',
       },
@@ -501,7 +506,8 @@ export async function createDriveFolder(accessToken, name, parentId) {
     err.status = 500;
     throw err;
   }
-  return created;
+  if (!parent) return created;
+  return enforceFolderParent(accessToken, created, parent);
 }
 
 /** Chia sẻ folder cho email khác (Drive 404 nếu mở bằng tài khoản không có quyền). */
@@ -569,4 +575,91 @@ export async function ensureChildFolder(accessToken, parentId, name, { fallbackR
   }
   const created = await createDriveFolder(accessToken, name, parent);
   return { ...created, created: true };
+}
+
+function fromV2File(file) {
+  if (!file?.id) return file;
+  const parents = Array.isArray(file.parents)
+    ? file.parents.map((p) => (typeof p === 'string' ? p : p?.id)).filter(Boolean)
+    : [];
+  return {
+    ...file,
+    name: file.name || file.title,
+    webViewLink: file.webViewLink || file.alternateLink,
+    parents: parents.length ? parents : file.parents,
+  };
+}
+
+export async function listChildIdsV2(accessToken, folderId) {
+  if (!folderId) return [];
+  const data = await driveApi(accessToken, `files/${folderId}/children`, {
+    apiVersion: 'v2',
+    qs: { maxResults: '200' },
+  });
+  return [...new Set((data?.items || []).map((item) => item?.id).filter(Boolean))];
+}
+
+export async function listChildrenV2(accessToken, folderId) {
+  const ids = await listChildIdsV2(accessToken, folderId);
+  const out = [];
+  for (const id of ids) {
+    const file = await getDriveFile(accessToken, id);
+    if (file && file.trashed !== true) out.push(fromV2File(file));
+  }
+  return out;
+}
+
+export async function insertChildV2(accessToken, parentId, childId) {
+  if (!parentId || !childId) return false;
+  try {
+    await driveApi(accessToken, `files/${parentId}/children`, {
+      method: 'POST',
+      apiVersion: 'v2',
+      body: { id: childId },
+    });
+    return true;
+  } catch (err) {
+    const msg = String(err?.message || '');
+    if (err?.status === 409 || /already/i.test(msg)) return true;
+    console.warn('insertChildV2:', err.message || err);
+    return false;
+  }
+}
+
+export async function enforceFolderParent(accessToken, folder, parentId) {
+  if (!folder?.id || !parentId) return folder;
+  await insertChildV2(accessToken, parentId, folder.id);
+  const moved = await moveToParent(accessToken, folder.id, parentId);
+  return isDriveFolder(moved) ? moved : folder;
+}
+
+export async function createChildFolder(accessToken, name, parentId) {
+  const parentFile = parentId && parentId !== 'root'
+    ? await resolveToFolder(accessToken, parentId)
+    : null;
+  const parent = parentFile?.id || parentId || undefined;
+
+  let created = null;
+  try {
+    const raw = await driveApi(accessToken, 'files', {
+      method: 'POST',
+      apiVersion: 'v2',
+      qs: { supportsAllDrives: 'true' },
+      body: {
+        title: name,
+        mimeType: FOLDER_MIME,
+        parents: parent ? [{ id: parent }] : undefined,
+      },
+    });
+    created = fromV2File(raw);
+    if (created && !created.mimeType) created.mimeType = FOLDER_MIME;
+  } catch (err) {
+    console.warn('createChildFolder v2:', err.message || err);
+  }
+
+  if (!isDriveFolder(created)) {
+    created = await createDriveFolder(accessToken, name, parent);
+  }
+  if (!isDriveFolder(created) || !parent) return created;
+  return enforceFolderParent(accessToken, created, parent);
 }

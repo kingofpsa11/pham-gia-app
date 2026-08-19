@@ -367,13 +367,23 @@ export default function BaoGiaForm({ mode, baoGiaId, initialData, onSaved, onCan
       }
       if (folderId) setIdFolder(folderId);
       if (result.drive?.google_email) setDriveEmail(result.drive.google_email);
-      if (result.drive_warning && !result.drive?.id_folder) {
-        addToast('error', result.drive_warning);
+      const subfolders = Array.isArray(result.drive?.subfolders) ? result.drive.subfolders : [];
+      const folderName = result.drive?.ten_folder || result.data?.ten_folder_du_an || '';
+      if (!folderId) {
+        addToast('error', result.drive_warning || 'Không tạo được thư mục Drive');
+        return;
+      }
+      if (result.drive_warning) {
+        addToast('warning', result.drive_warning);
+        return;
+      }
+      if (subfolders.length >= 3) {
+        addToast('success', `Đã tạo thư mục Drive: ${folderName} (BV, Đầu vào, Đầu ra)`);
         return;
       }
       addToast(
-        'success',
-        `Đã tạo thư mục Drive: ${result.drive?.ten_folder || result.data?.ten_folder_du_an} (BV, Đầu vào, Đầu ra)`,
+        'warning',
+        `Đã có folder${folderName ? ` "${folderName}"` : ''} nhưng chưa thấy đủ BV, Đầu vào, Đầu ra bên trong. Bấm Tạo lại.`,
       );
     } catch (err) {
       addToast('error', err instanceof Error ? err.message : 'Không tạo được thư mục Drive');

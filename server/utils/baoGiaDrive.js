@@ -10,7 +10,11 @@ import {
   findAllFoldersNamed,
   resolveToFolder,
   ensureChildFolder,
-  createDriveFolder,
+  createChildFolder,
+  listChildrenV2,
+  listChildIdsV2,
+  insertChildV2,
+  enforceFolderParent,
   renameDriveFile,
   shareDriveFile,
   moveToParent,
@@ -204,7 +208,7 @@ async function ensureYearInBaoGia(accessToken, baoGiaRoot, nam) {
   } catch (err) {
     console.warn('find year in 00 Báo giá:', err.message || err);
   }
-  const created = await createDriveFolder(accessToken, yearName, baoGiaRoot.id);
+  const created = await createChildFolder(accessToken, yearName, baoGiaRoot.id);
   console.log('Drive created year under 00 Báo giá:', { year: yearName, id: created?.id, parent: baoGiaRoot.id });
   return created;
 }
@@ -227,44 +231,51 @@ async function listQuoteFolders(accessToken, yearFolderId) {
   return [...map.values()];
 }
 
-async function placeFolderInParent(accessToken, folder, parentId) {
-  if (!isDriveFolder(folder) || !parentId) return folder;
-  if ((folder.parents || []).includes(parentId)) return folder;
-  const fresh = await getDriveFile(accessToken, folder.id, 'id,name,mimeType,parents,webViewLink,trashed');
-  if (isDriveFolder(fresh) && (fresh.parents || []).includes(parentId)) return fresh;
-  const moved = await moveToParent(accessToken, folder.id, parentId);
-  return isDriveFolder(moved) ? moved : (fresh || folder);
+async function listVerifiedChildFolders(accessToken, parentId) {
+  try {
+    return (await listChildrenV2(accessToken, parentId)).filter((f) => isDriveFolder(f));
+  } catch (err) {
+    console.warn('listVerifiedChildFolders v2:', err.message || err);
+    const direct = await listDirectItems(accessToken, parentId, 50);
+    return (direct || []).filter(
+      (f) => isDriveFolder(f) && (f.parents || []).includes(parentId),
+    );
+  }
 }
 
-async function ensureSubfolders(accessToken, parentId, { forceCreate = false } = {}) {
+async function ensureSubfolders(accessToken, parentId) {
   const parent = await getDriveFile(accessToken, parentId, 'id,name,mimeType,trashed,parents');
   if (!isDriveFolder(parent)) {
     const err = new Error('Không tạo được thư mục con vì thư mục báo giá không hợp lệ');
     err.status = 400;
     throw err;
   }
-  const listed = forceCreate ? [] : await listDirectItems(accessToken, parentId, 30);
-  const verified = (listed || []).filter(
-    (f) => isDriveFolder(f) && (f.parents || []).includes(parentId),
-  );
+  const verified = await listVerifiedChildFolders(accessToken, parentId);
   const ids = {};
   const failed = [];
   for (const name of SUBFOLDERS) {
     try {
       const found = verified.find((f) => driveNamesEqual(f.name, name));
-      if (found) {
+      if (found?.id) {
+        await enforceFolderParent(accessToken, found, parentId);
         ids[name] = found.id;
         continue;
       }
-      let created = await createDriveFolder(accessToken, name, parentId);
-      created = await placeFolderInParent(accessToken, created, parentId);
+      const created = await createChildFolder(accessToken, name, parentId);
       if (!isDriveFolder(created)) {
         failed.push(`${name}: không tạo được`);
         continue;
       }
-      if (created.parents?.length && !created.parents.includes(parentId)) {
-        failed.push(`${name}: tạo sai vị trí`);
-        continue;
+      try {
+        const childIds = await listChildIdsV2(accessToken, parentId);
+        if (!childIds.includes(created.id)) {
+          await insertChildV2(accessToken, parentId, created.id);
+          await moveToParent(accessToken, created.id, parentId);
+        }
+      } catch (verifyErr) {
+        console.warn('verify bao-gia child:', name, verifyErr.message || verifyErr);
+        await insertChildV2(accessToken, parentId, created.id);
+        await moveToParent(accessToken, created.id, parentId);
       }
       ids[name] = created.id;
       verified.push(created);
@@ -319,7 +330,14 @@ export async function ensureBaoGiaDriveFolders({ userId, baoGia, tenKhachHang, s
           await renameDriveFile(accessToken, current.id, wanted);
           current.name = wanted;
         }
-        const subfolders = await ensureSubfolders(accessToken, current.id);
+        let subfolders = {};
+        let subWarning = '';
+        try {
+          subfolders = await ensureSubfolders(accessToken, current.id);
+        } catch (subErr) {
+          console.error('ensureBaoGiaDriveFolders existing subfolders:', subErr.message || subErr);
+          subWarning = permissionHint(subErr);
+        }
         await shareFolderWithEmails(accessToken, current.id, [shareWithEmail, googleEmail]);
         return {
           id_folder: current.id,
@@ -328,6 +346,7 @@ export async function ensureBaoGiaDriveFolders({ userId, baoGia, tenKhachHang, s
           google_email: googleEmail,
           subfolders: Object.keys(subfolders),
           created: false,
+          warning: subWarning || undefined,
         };
       }
     }
@@ -347,7 +366,7 @@ export async function ensureBaoGiaDriveFolders({ userId, baoGia, tenKhachHang, s
     const stt = nextSttFromFolders(siblings);
     const wantedName = resolveQuoteFolderName(customName, tenKhachHang, baoGia.ten_du_an, stt);
 
-    const quoteFolder = await createDriveFolder(accessToken, wantedName, yearFolder.id);
+    const quoteFolder = await createChildFolder(accessToken, wantedName, yearFolder.id);
     if (!isDriveFolder(quoteFolder)) {
       const err = new Error('Google Drive trả về file không phải thư mục báo giá');
       err.status = 500;
@@ -357,7 +376,7 @@ export async function ensureBaoGiaDriveFolders({ userId, baoGia, tenKhachHang, s
     let subfolders = {};
     let subWarning = '';
     try {
-      subfolders = await ensureSubfolders(accessToken, quoteFolder.id, { forceCreate: true });
+      subfolders = await ensureSubfolders(accessToken, quoteFolder.id);
     } catch (subErr) {
       console.error('ensureBaoGiaDriveFolders subfolders:', subErr.message || subErr);
       subWarning = permissionHint(subErr);
