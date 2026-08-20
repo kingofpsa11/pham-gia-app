@@ -10,7 +10,7 @@
     "update-admin-email": "node server/scripts/update-admin-email.js",
     "reset-admin-password": "node server/scripts/reset-admin-password.js",
     "build": "vite build",
-    "test": "node --test",
+    "test": "node --test server/*.test.js",
     "lint": "eslint .",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.app.json"
