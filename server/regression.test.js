@@ -7,7 +7,9 @@ process.env.JWT_SECRET = 'test-secret';
 
 const { app } = await import('./index.js');
 const { mergeDongTienUpdate } = await import('./routes/dong-tien-moi.js');
+const { deleteHopDongCascade } = await import('./routes/hop-dong.js');
 const { mergePhieuGiaoHangUpdate } = await import('./routes/phieu-giao-hang.js');
+const { normalizeChiTietInput } = await import('./utils/phuLucHopDong.js');
 
 async function request(path, options = {}) {
   const server = app.listen(0);
@@ -122,4 +124,41 @@ test('delivery-note updates preserve omitted header fields and debt value', () =
 
   const clearedDetails = mergePhieuGiaoHangUpdate(existing, { chi_tiet: [] }, 4, 0);
   assert.equal(clearedDetails.gia_tri_ghi_no, 0);
+});
+
+test('phu luc rejects duplicate existing contract lines before quantity updates', () => {
+  const hdChiTiet = [{
+    id: 10,
+    ten_san_pham: 'Panel',
+    don_vi: 'cai',
+    so_luong: 100,
+    don_gia_von: 1,
+    gia_ban_thuc_te: 1,
+    thue_suat: 10,
+    chenh_lech_phan_tram: 0,
+    gia_hop_dong: 1,
+  }];
+
+  assert.throws(
+    () => normalizeChiTietInput([
+      { hop_dong_chi_tiet_id: 10, so_luong_thay_doi: 10 },
+      { hop_dong_chi_tiet_id: 10, so_luong_thay_doi: 5 },
+    ], hdChiTiet),
+    /bị trùng/,
+  );
+});
+
+test('contract delete removes phu luc rows before contract detail rows', async () => {
+  const calls = [];
+  await deleteHopDongCascade(async (sql, params) => {
+    calls.push({ sql: sql.replace(/\s+/g, ' ').trim(), params });
+  }, 42);
+
+  assert.equal(calls.length, 4);
+  assert.match(calls[0].sql, /^DELETE FROM phu_luc_hop_dong_chi_tiet/);
+  assert.match(calls[0].sql, /phu_luc_hop_dong WHERE hop_dong_id = \?/);
+  assert.equal(calls[1].sql, 'DELETE FROM phu_luc_hop_dong WHERE hop_dong_id = ?');
+  assert.equal(calls[2].sql, 'DELETE FROM hop_dong_chi_tiet WHERE hop_dong_id = ?');
+  assert.equal(calls[3].sql, 'DELETE FROM hop_dong WHERE id = ?');
+  assert.deepEqual(calls.map((c) => c.params), [[42], [42], [42], [42]]);
 });
