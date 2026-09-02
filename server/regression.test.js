@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 import jwt from 'jsonwebtoken';
 import app from './index.js';
+import { parseNgayGiaoDich, parseNgayHachToan, preserveDateOnlyTime } from './utils/dongTienDate.js';
 import { DEFAULT_JWT_SECRET, getJwtSecret } from './utils/jwtSecret.js';
 import { patchNullable, patchString, patchValue } from './utils/patchMerge.js';
 
@@ -116,5 +117,22 @@ describe('patch merge helpers', () => {
     assert.equal(patchValue({ ma_giao_dich_ngan_hang: null }, existing, 'ma_giao_dich_ngan_hang'), null);
     assert.equal(patchNullable({ ghi_chu: '' }, existing, 'ghi_chu'), null);
     assert.equal(patchString({}, existing, 'ghi_chu'), 'old note');
+  });
+});
+
+describe('cashflow date preservation', () => {
+  it('keeps the existing transaction time for date-only edit payloads', () => {
+    const merged = preserveDateOnlyTime('2026-08-05', '2026-08-01 09:30:00');
+
+    assert.equal(merged, '2026-08-05 09:30:00');
+    assert.equal(parseNgayGiaoDich(merged), '2026-08-05 09:30:00');
+    assert.equal(parseNgayHachToan(merged), '2026-08-05');
+  });
+
+  it('leaves explicit transaction times unchanged', () => {
+    assert.equal(
+      preserveDateOnlyTime('2026-08-05 14:15:16', '2026-08-01 09:30:00'),
+      '2026-08-05 14:15:16',
+    );
   });
 });
