@@ -2,8 +2,8 @@ import { Router } from 'express';
 import { query, queryOne } from '../db.js';
 import { dbErrorResponse } from '../utils/errors.js';
 import { parsePaging, sqlLimitOffset } from '../utils/pagination.js';
-import { parseNgayGiaoDich, parseNgayHachToan } from '../utils/dongTienDate.js';
-import { patchNullable, patchNumber, patchString, patchValue } from '../utils/patchMerge.js';
+import { parseNgayGiaoDich, parseNgayHachToan, preserveDateOnlyTime } from '../utils/dongTienDate.js';
+import { hasPatchField, patchNullable, patchNumber, patchString, patchValue } from '../utils/patchMerge.js';
 
 const router = Router();
 
@@ -229,8 +229,15 @@ router.post('/dong-tien-moi/bulk-update', async (req, res) => {
           const existing = await queryOne('SELECT * FROM dong_tien_moi WHERE id = ?', [item.id]);
           if (!existing) throw new Error(`Không tìm thấy ID ${item.id}`);
 
-          const ngayGD = parseNgayGiaoDich(patchValue(item, existing, 'ngay_giao_dich'));
-          const ngayHT = patchValue(item, existing, 'ngay_hach_toan') || parseNgayHachToan(ngayGD);
+          const hasNgayGiaoDich = hasPatchField(item, 'ngay_giao_dich');
+          const hasNgayHachToan = hasPatchField(item, 'ngay_hach_toan');
+          const ngayGiaoDichInput = hasNgayGiaoDich
+            ? preserveDateOnlyTime(patchValue(item, existing, 'ngay_giao_dich'), existing.ngay_giao_dich)
+            : patchValue(item, existing, 'ngay_giao_dich');
+          const ngayGD = parseNgayGiaoDich(ngayGiaoDichInput);
+          const ngayHT = hasNgayHachToan
+            ? patchValue(item, existing, 'ngay_hach_toan')
+            : (hasNgayGiaoDich ? parseNgayHachToan(ngayGiaoDichInput) : (existing.ngay_hach_toan || parseNgayHachToan(ngayGD)));
           const loaiGiaoDich = patchValue(item, existing, 'loai_giao_dich');
           const taiKhoanTienId = patchValue(item, existing, 'tai_khoan_tien_id');
           const soTien = Number(patchValue(item, existing, 'so_tien')) || 0;
@@ -326,8 +333,15 @@ router.put('/dong-tien-moi/:id', async (req, res) => {
     const existing = await queryOne('SELECT * FROM dong_tien_moi WHERE id = ?', [id]);
     if (!existing) return res.status(404).json({ error: 'Not found' });
 
-    const ngayGD = parseNgayGiaoDich(patchValue(body, existing, 'ngay_giao_dich'));
-    const ngayHT = patchValue(body, existing, 'ngay_hach_toan') || parseNgayHachToan(ngayGD);
+    const hasNgayGiaoDich = hasPatchField(body, 'ngay_giao_dich');
+    const hasNgayHachToan = hasPatchField(body, 'ngay_hach_toan');
+    const ngayGiaoDichInput = hasNgayGiaoDich
+      ? preserveDateOnlyTime(patchValue(body, existing, 'ngay_giao_dich'), existing.ngay_giao_dich)
+      : patchValue(body, existing, 'ngay_giao_dich');
+    const ngayGD = parseNgayGiaoDich(ngayGiaoDichInput);
+    const ngayHT = hasNgayHachToan
+      ? patchValue(body, existing, 'ngay_hach_toan')
+      : (hasNgayGiaoDich ? parseNgayHachToan(ngayGiaoDichInput) : (existing.ngay_hach_toan || parseNgayHachToan(ngayGD)));
     await query(
       `UPDATE dong_tien_moi SET ngay_giao_dich=?, ngay_hach_toan=?, loai_giao_dich=?, chieu_tien=?, tai_khoan_tien_id=?, tai_khoan_nhan_id=?, so_tien=?, doi_tuong_id=?, khach_hang_id=?, nha_cung_cap_id=?, hop_dong_id=?, hop_dong_mua_id=?, hang_muc_thu_chi_id=?, mo_ta_giao_dich=?, so_tai_khoan_doi_ung=?, ten_tai_khoan_doi_ung=?, so_du_sau_giao_dich=?, ma_giao_dich_ngan_hang=?, ghi_chu=?, trang_thai=? WHERE id=?`,
       [
