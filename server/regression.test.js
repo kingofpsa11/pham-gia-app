@@ -138,7 +138,7 @@ describe('cashflow date preservation', () => {
   });
 });
 
-test('contract Drive folder lookup does not reuse STT-only matches', () => {
+it('does not reuse contract Drive folders by STT-only matches', () => {
   const folders = [
     { id: 'old', name: '01 Old Customer - Old Project' },
     { id: 'exact', name: '01 New Customer - New Project' },
