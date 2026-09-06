@@ -3,6 +3,7 @@ import { query, queryOne } from '../db.js';
 import { dbErrorResponse } from '../utils/errors.js';
 import { parsePaging, sqlLimitOffset } from '../utils/pagination.js';
 import { parseNgayGiaoDich, parseNgayHachToan } from '../utils/dongTienDate.js';
+import { mergeOmittedFields, preserveExistingTimeForDateOnly } from '../utils/patchMerge.js';
 
 const router = Router();
 
@@ -31,6 +32,41 @@ const LIST_SELECT = `
   LEFT JOIN hop_dong_mua hdm ON hdm.id = dt.hop_dong_mua_id
   LEFT JOIN doi_tuong dt2 ON dt2.id = dt.doi_tuong_id
 `;
+
+const CASHFLOW_UPDATE_FIELDS = [
+  'ngay_giao_dich',
+  'loai_giao_dich',
+  'chieu_tien',
+  'tai_khoan_tien_id',
+  'tai_khoan_nhan_id',
+  'so_tien',
+  'doi_tuong_id',
+  'khach_hang_id',
+  'nha_cung_cap_id',
+  'hop_dong_id',
+  'hop_dong_mua_id',
+  'hang_muc_thu_chi_id',
+  'mo_ta_giao_dich',
+  'so_tai_khoan_doi_ung',
+  'ten_tai_khoan_doi_ung',
+  'so_du_sau_giao_dich',
+  'ma_giao_dich_ngan_hang',
+  'ghi_chu',
+  'trang_thai',
+];
+
+const CASHFLOW_BULK_UPDATE_FIELDS = CASHFLOW_UPDATE_FIELDS.filter(
+  (field) => field !== 'doi_tuong_id',
+);
+
+function mergeCashflowUpdate(patch, existing, fields = CASHFLOW_UPDATE_FIELDS) {
+  const merged = mergeOmittedFields(patch, existing, fields);
+  merged.ngay_giao_dich = preserveExistingTimeForDateOnly(
+    merged.ngay_giao_dich,
+    existing?.ngay_giao_dich,
+  );
+  return merged;
+}
 
 router.get('/dong-tien-moi', async (req, res) => {
   try {
@@ -224,17 +260,21 @@ router.post('/dong-tien-moi/bulk-update', async (req, res) => {
       const item = items[i] || {};
       const excelRow = item._excelRow || i + 2;
       try {
-        const ngayGD = parseNgayGiaoDich(item.ngay_giao_dich);
-        const ngayHT = parseNgayHachToan(item.ngay_giao_dich);
-        const soTien = Number(item.so_tien) || 0;
-        if (!item.loai_giao_dich || !item.tai_khoan_tien_id || soTien <= 0) {
+        let payload = item;
+        if (item.id) {
+          const existing = await queryOne('SELECT * FROM dong_tien_moi WHERE id = ?', [item.id]);
+          if (!existing) throw new Error(`Không tìm thấy ID ${item.id}`);
+          payload = mergeCashflowUpdate(item, existing, CASHFLOW_BULK_UPDATE_FIELDS);
+        }
+
+        const ngayGD = parseNgayGiaoDich(payload.ngay_giao_dich);
+        const ngayHT = parseNgayHachToan(payload.ngay_giao_dich);
+        const soTien = Number(payload.so_tien) || 0;
+        if (!payload.loai_giao_dich || !payload.tai_khoan_tien_id || soTien <= 0) {
           throw new Error('Thiếu loại GD, tài khoản hoặc số tiền');
         }
 
         if (item.id) {
-          const exists = await queryOne('SELECT id FROM dong_tien_moi WHERE id = ?', [item.id]);
-          if (!exists) throw new Error(`Không tìm thấy ID ${item.id}`);
-
           await query(
             `UPDATE dong_tien_moi SET
               ngay_giao_dich=?, ngay_hach_toan=?, loai_giao_dich=?, chieu_tien=?, tai_khoan_tien_id=?, tai_khoan_nhan_id=?,
@@ -245,23 +285,23 @@ router.post('/dong-tien-moi/bulk-update', async (req, res) => {
             [
               ngayGD,
               ngayHT,
-              item.loai_giao_dich,
-              item.chieu_tien || null,
-              item.tai_khoan_tien_id,
-              item.tai_khoan_nhan_id || null,
+              payload.loai_giao_dich,
+              payload.chieu_tien || null,
+              payload.tai_khoan_tien_id,
+              payload.tai_khoan_nhan_id || null,
               soTien,
-              item.hang_muc_thu_chi_id || null,
-              item.mo_ta_giao_dich || null,
-              item.khach_hang_id || null,
-              item.nha_cung_cap_id || null,
-              item.hop_dong_id || null,
-              item.hop_dong_mua_id || null,
-              item.so_tai_khoan_doi_ung || null,
-              item.ten_tai_khoan_doi_ung || null,
-              item.so_du_sau_giao_dich ?? null,
-              item.ma_giao_dich_ngan_hang || null,
-              item.ghi_chu || null,
-              item.trang_thai || 'hoan_thanh',
+              payload.hang_muc_thu_chi_id || null,
+              payload.mo_ta_giao_dich || null,
+              payload.khach_hang_id || null,
+              payload.nha_cung_cap_id || null,
+              payload.hop_dong_id || null,
+              payload.hop_dong_mua_id || null,
+              payload.so_tai_khoan_doi_ung || null,
+              payload.ten_tai_khoan_doi_ung || null,
+              payload.so_du_sau_giao_dich ?? null,
+              payload.ma_giao_dich_ngan_hang || null,
+              payload.ghi_chu || null,
+              payload.trang_thai || 'hoan_thanh',
               item.id,
             ]
           );
@@ -276,24 +316,24 @@ router.post('/dong-tien-moi/bulk-update', async (req, res) => {
               maGD,
               ngayGD,
               ngayHT,
-              item.loai_giao_dich,
-              item.chieu_tien || null,
-              item.tai_khoan_tien_id,
-              item.tai_khoan_nhan_id || null,
+              payload.loai_giao_dich,
+              payload.chieu_tien || null,
+              payload.tai_khoan_tien_id,
+              payload.tai_khoan_nhan_id || null,
               soTien,
-              item.hang_muc_thu_chi_id || null,
-              item.mo_ta_giao_dich || null,
-              item.khach_hang_id || null,
-              item.nha_cung_cap_id || null,
-              item.hop_dong_id || null,
-              item.hop_dong_mua_id || null,
-              item.so_tai_khoan_doi_ung || null,
-              item.ten_tai_khoan_doi_ung || null,
-              item.so_du_sau_giao_dich ?? null,
+              payload.hang_muc_thu_chi_id || null,
+              payload.mo_ta_giao_dich || null,
+              payload.khach_hang_id || null,
+              payload.nha_cung_cap_id || null,
+              payload.hop_dong_id || null,
+              payload.hop_dong_mua_id || null,
+              payload.so_tai_khoan_doi_ung || null,
+              payload.ten_tai_khoan_doi_ung || null,
+              payload.so_du_sau_giao_dich ?? null,
               'import_excel',
-              item.ma_giao_dich_ngan_hang || null,
-              item.ghi_chu || null,
-              item.trang_thai || 'hoan_thanh',
+              payload.ma_giao_dich_ngan_hang || null,
+              payload.ghi_chu || null,
+              payload.trang_thai || 'hoan_thanh',
             ]
           );
           created++;
@@ -313,7 +353,9 @@ router.post('/dong-tien-moi/bulk-update', async (req, res) => {
 router.put('/dong-tien-moi/:id', async (req, res) => {
   try {
     const id = req.params.id;
-    const body = req.body || {};
+    const existing = await queryOne('SELECT * FROM dong_tien_moi WHERE id = ?', [id]);
+    if (!existing) return res.status(404).json({ error: 'Not found' });
+    const body = mergeCashflowUpdate(req.body || {}, existing);
     const ngayGD = parseNgayGiaoDich(body.ngay_giao_dich);
     const ngayHT = parseNgayHachToan(body.ngay_giao_dich);
     await query(
