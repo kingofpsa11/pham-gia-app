@@ -862,9 +862,15 @@ export default function DongTienMoiList() {
 
     setSaving(true);
     try {
+      const existingRow = editingId
+        ? data.find((row) => row.id === editingId) || allFilteredRows.find((row) => row.id === editingId)
+        : null;
+      const chieuTien = loaiGd === 'chuyen_khoan_noi_bo'
+        ? existingRow?.chieu_tien || 'chi'
+        : null;
       const payload = {
         loai_giao_dich: loaiGd,
-        chieu_tien: loaiGd === 'chuyen_khoan_noi_bo' ? 'chi' : null,
+        chieu_tien: chieuTien,
         ngay_giao_dich: form.ngay_giao_dich,
         tai_khoan_tien_id: Number(form.tai_khoan_tien_id),
         tai_khoan_nhan_id: form.tai_khoan_nhan_id ? Number(form.tai_khoan_nhan_id) : null,
