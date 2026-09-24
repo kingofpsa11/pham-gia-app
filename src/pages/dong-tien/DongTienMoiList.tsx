@@ -1020,11 +1020,13 @@ export default function DongTienMoiList() {
   }
 
   function toggleImportRow(idx: number, stt: number, checked: boolean, shiftKey: boolean) {
+    const anchor = lastImportClickIdx.current;
+    lastImportClickIdx.current = idx;
     setSelectedImportStts(prev => {
       const next = new Set(prev);
-      if (shiftKey && lastImportClickIdx.current != null) {
-        const from = Math.min(lastImportClickIdx.current, idx);
-        const to = Math.max(lastImportClickIdx.current, idx);
+      if (shiftKey && anchor != null) {
+        const from = Math.min(anchor, idx);
+        const to = Math.max(anchor, idx);
         for (let i = from; i <= to; i++) {
           const r = excelRows[i];
           if (!r?.valid) continue;
@@ -1038,7 +1040,6 @@ export default function DongTienMoiList() {
       }
       return next;
     });
-    lastImportClickIdx.current = idx;
   }
 
   function selectCompletedImportRows() {
@@ -1561,12 +1562,12 @@ export default function DongTienMoiList() {
                                 type="checkbox"
                                 disabled={!row.valid}
                                 checked={isSelected}
-                                onClick={e => {
+                                onMouseDown={e => {
+                                  if (!row.valid || e.button !== 0) return;
                                   e.preventDefault();
-                                  if (!row.valid) return;
                                   toggleImportRow(idx, row.stt, !isSelected, e.shiftKey);
                                 }}
-                                onChange={() => { /* controlled via onClick for Shift+click range */ }}
+                                onChange={() => { /* chọn qua onMouseDown để Shift+click chọn được khoảng */ }}
                                 className="rounded border-gray-300 disabled:opacity-40"
                                 title={row.valid ? 'Shift+click để chọn khoảng' : 'Dòng không hợp lệ'}
                               />
