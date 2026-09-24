@@ -3,6 +3,7 @@ import {
   dongTienMoiApi, taiKhoanTienApi, hangMucThuChiApi,
   khachHangApi, nhaCungCapApi, hopDongApi, hopDongMuaApi,
 } from '../../lib/api';
+import { loadHangMucHayDung, saveHangMucHayDung, toggleHangMucHayDung } from '../../lib/hangMucFavorites';
 import { useToastStore } from '../../store/toast';
 import { useAuthStore } from '../../store/auth';
 import {
@@ -27,8 +28,9 @@ import {
 import {
   Plus, Pencil, Trash2, Filter, Banknote, Search,
   ArrowUpRight, ArrowDownRight, ArrowLeftRight, Settings2,
-  ChevronDown, X, RefreshCw, FileSpreadsheet, Save,
+  ChevronDown, X, RefreshCw, FileSpreadsheet, Save, Star,
 } from 'lucide-react';
+import HangMucHayDungManager from '../../components/dong-tien/HangMucHayDungManager';
 import type {
   TaiKhoanTien, HangMucThuChi, DongTienMoi,
   KhachHang, NhaCungCap, HopDong, HopDongMua, LoaiGiaoDich, PhamViTaiKhoan,
@@ -74,6 +76,8 @@ interface HangMucSelectOption {
   label: string;
   indent: number;
   isParent: boolean;
+  groupLabel: string;
+  pathLabel: string;
 }
 
 interface BuildHangMucOpts {
@@ -224,13 +228,30 @@ function sortHangMucRoots(roots: HangMucThuChi[], opts?: BuildHangMucOpts): Hang
   });
 }
 
+function hangMucPathLabel(
+  hm: HangMucThuChi,
+  byId: Record<number, HangMucThuChi>,
+): string {
+  const names: string[] = [];
+  let cur: HangMucThuChi | undefined = hm;
+  const seen = new Set<number>();
+  while (cur && !seen.has(cur.id)) {
+    seen.add(cur.id);
+    names.unshift(cur.ten_hang_muc);
+    cur = cur.parent_id ? byId[cur.parent_id] : undefined;
+  }
+  return names.join(' › ');
+}
+
 function buildHangMucOptions(list: HangMucThuChi[], opts?: BuildHangMucOpts): HangMucSelectOption[] {
   const byParent: Record<number | string, HangMucThuChi[]> = {};
+  const byId: Record<number, HangMucThuChi> = {};
   const parentIds = new Set<number>();
   for (const hm of list) {
     const key = hm.parent_id ?? 'root';
     if (!byParent[key]) byParent[key] = [];
     byParent[key].push(hm);
+    byId[hm.id] = hm;
     if (hm.parent_id) parentIds.add(hm.parent_id);
   }
   for (const children of Object.values(byParent)) {
@@ -238,48 +259,88 @@ function buildHangMucOptions(list: HangMucThuChi[], opts?: BuildHangMucOpts): Ha
   }
 
   const result: HangMucSelectOption[] = [];
-  function walkChildren(parentId: number, depth: number) {
+  function walkChildren(parentId: number, depth: number, groupLabel: string) {
     for (const hm of byParent[parentId] || []) {
       result.push({
         id: hm.id,
         label: hm.ten_hang_muc,
         indent: depth,
         isParent: parentIds.has(hm.id),
+        groupLabel,
+        pathLabel: hangMucPathLabel(hm, byId),
       });
-      walkChildren(hm.id, depth + 1);
+      walkChildren(hm.id, depth + 1, groupLabel);
     }
   }
 
   const roots = sortHangMucRoots(byParent['root'] || [], opts);
 
   for (const hm of roots) {
+    const groupLabel = hm.ten_hang_muc;
     result.push({
       id: hm.id,
       label: hm.ten_hang_muc,
       indent: 0,
       isParent: parentIds.has(hm.id),
+      groupLabel,
+      pathLabel: hangMucPathLabel(hm, byId),
     });
-    walkChildren(hm.id, 1);
+    walkChildren(hm.id, 1, groupLabel);
   }
   return result;
 }
 
 function renderHangMucSelectOptions(
   options: HangMucSelectOption[],
-  indentMultiplier = 2,
+  opts?: { indentMultiplier?: number; hayDungIds?: number[] },
 ) {
-  return options.map(o => (
-    <option
-      key={o.id}
-      value={o.id}
-      className={o.isParent ? 'font-bold' : ''}
-      style={o.isParent ? { fontWeight: 700, color: '#0f766e' } : undefined}
-    >
-      {'\u00A0'.repeat(o.indent * indentMultiplier)}
-      {o.isParent ? '▸ ' : ''}
-      {o.label}
-    </option>
-  ));
+  const indentMultiplier = opts?.indentMultiplier ?? 2;
+  const hayDungIds = opts?.hayDungIds ?? [];
+  const byId = new Map(options.map((o) => [o.id, o]));
+  const frequent = hayDungIds
+    .map((id) => byId.get(id))
+    .filter((o): o is HangMucSelectOption => !!o);
+
+  const groups: { label: string; options: HangMucSelectOption[] }[] = [];
+  for (const o of options) {
+    const label = o.groupLabel || 'Khác';
+    const last = groups[groups.length - 1];
+    if (last && last.label === label) {
+      last.options.push(o);
+    } else {
+      groups.push({ label, options: [o] });
+    }
+  }
+
+  function optionEl(o: HangMucSelectOption, key: string, usePath: boolean) {
+    return (
+      <option
+        key={key}
+        value={o.id}
+        className={o.isParent ? 'font-bold' : ''}
+        style={o.isParent ? { fontWeight: 700, color: '#0f766e' } : undefined}
+      >
+        {usePath
+          ? o.pathLabel
+          : `${'\u00A0'.repeat(o.indent * indentMultiplier)}${o.isParent ? '▸ ' : ''}${o.label}`}
+      </option>
+    );
+  }
+
+  return (
+    <>
+      {frequent.length > 0 && (
+        <optgroup label="★ Hay dùng">
+          {frequent.map((o) => optionEl(o, `haydung-${o.id}`, true))}
+        </optgroup>
+      )}
+      {groups.map((g) => (
+        <optgroup key={g.label} label={g.label}>
+          {g.options.map((o) => optionEl(o, String(o.id), false))}
+        </optgroup>
+      ))}
+    </>
+  );
 }
 
 function isHangMucChuyenKhoanNoiBo(hangMucId: string, list: HangMucThuChi[]): boolean {
@@ -723,6 +784,12 @@ export default function DongTienMoiList() {
   const hdTimers = useRef<Record<number, ReturnType<typeof setTimeout>>>({});
   const [copyDownOpen, setCopyDownOpen] = useState<number | null>(null);
   const [copyDownCount, setCopyDownCount] = useState(1);
+  const [selectedImportStts, setSelectedImportStts] = useState<Set<number>>(new Set());
+  const lastImportClickIdx = useRef<number | null>(null);
+  const [importRangeFrom, setImportRangeFrom] = useState('');
+  const [importRangeTo, setImportRangeTo] = useState('');
+  const [hangMucHayDungIds, setHangMucHayDungIds] = useState<number[]>(() => loadHangMucHayDung());
+  const [hayDungManagerOpen, setHayDungManagerOpen] = useState(false);
 
   function resetImportTagMaps() {
     setKhSearchMap({});
@@ -736,6 +803,14 @@ export default function DongTienMoiList() {
     setHdResultsMap({});
     setCopyDownOpen(null);
     setCopyDownCount(1);
+    setSelectedImportStts(new Set());
+    lastImportClickIdx.current = null;
+    setImportRangeFrom('');
+    setImportRangeTo('');
+  }
+
+  function setHangMucHayDung(ids: number[]) {
+    setHangMucHayDungIds(saveHangMucHayDung(ids));
   }
 
   function searchNccForRow(stt: number, q: string) {
@@ -774,6 +849,14 @@ export default function DongTienMoiList() {
     hopDongApi.list({ limit: 1000 }).then(({ data }) => setHopDongList((data as HopDong[]) ?? [])).catch(console.error);
     hopDongMuaApi.list({ limit: 1000 }).then(({ data }) => setHopDongMuaList((data as HopDongMua[]) ?? [])).catch(console.error);
   }, []);
+
+  useEffect(() => {
+    if (hangMucList.length === 0) return;
+    const valid = new Set(hangMucList.filter(h => h.trang_thai !== 'an').map(h => h.id));
+    const pruned = hangMucHayDungIds.filter(id => valid.has(id));
+    if (pruned.length !== hangMucHayDungIds.length) setHangMucHayDung(pruned);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hangMucList]);
 
   // ── Fetch data ─────────────────────────────────────────────────────────────
   const fetchData = useCallback(async () => {
@@ -928,6 +1011,69 @@ export default function DongTienMoiList() {
     addToast('success', `Đã bóc tách ${rows.length} dòng`);
   }
 
+  function selectImportStts(stts: number[], mode: 'replace' | 'add' = 'replace') {
+    setSelectedImportStts(prev => {
+      const next = mode === 'replace' ? new Set<number>() : new Set(prev);
+      for (const stt of stts) next.add(stt);
+      return next;
+    });
+  }
+
+  function toggleImportRow(idx: number, stt: number, checked: boolean, shiftKey: boolean) {
+    setSelectedImportStts(prev => {
+      const next = new Set(prev);
+      if (shiftKey && lastImportClickIdx.current != null) {
+        const from = Math.min(lastImportClickIdx.current, idx);
+        const to = Math.max(lastImportClickIdx.current, idx);
+        for (let i = from; i <= to; i++) {
+          const r = excelRows[i];
+          if (!r?.valid) continue;
+          if (checked) next.add(r.stt);
+          else next.delete(r.stt);
+        }
+      } else if (checked) {
+        next.add(stt);
+      } else {
+        next.delete(stt);
+      }
+      return next;
+    });
+    lastImportClickIdx.current = idx;
+  }
+
+  function selectCompletedImportRows() {
+    const stts = excelRows.filter(r => r.valid && r.hang_muc_thu_chi_id).map(r => r.stt);
+    if (stts.length === 0) {
+      addToast('warning', 'Chưa có dòng nào đã gắn hạng mục');
+      return;
+    }
+    selectImportStts(stts);
+    addToast('success', `Đã chọn ${stts.length} dòng đã gắn hạng mục`);
+  }
+
+  function selectAllValidImportRows() {
+    const stts = excelRows.filter(r => r.valid).map(r => r.stt);
+    selectImportStts(stts);
+  }
+
+  function selectImportRange() {
+    const from = Number(importRangeFrom);
+    const to = Number(importRangeTo);
+    if (!Number.isFinite(from) || !Number.isFinite(to) || from <= 0 || to <= 0) {
+      addToast('warning', 'Nhập STT từ — đến để chọn khoảng dòng');
+      return;
+    }
+    const lo = Math.min(from, to);
+    const hi = Math.max(from, to);
+    const stts = excelRows.filter(r => r.valid && r.stt >= lo && r.stt <= hi).map(r => r.stt);
+    if (stts.length === 0) {
+      addToast('warning', `Không có dòng hợp lệ trong khoảng STT ${lo}–${hi}`);
+      return;
+    }
+    selectImportStts(stts);
+    addToast('success', `Đã chọn ${stts.length} dòng (STT ${lo}–${hi})`);
+  }
+
   function updateExcelRow(stt: number, field: keyof ExcelRow, value: string) {
     if (field === 'hang_muc_thu_chi_id' && !showDoiTuongTagFields(value, hangMucList)) {
       setKhSearchMap((m) => ({ ...m, [stt]: '' }));
@@ -948,44 +1094,57 @@ export default function DongTienMoiList() {
       }
       return updated;
     }));
+    if (field === 'hang_muc_thu_chi_id') {
+      setSelectedImportStts(prev => {
+        const next = new Set(prev);
+        if (value) next.add(stt);
+        else next.delete(stt);
+        return next;
+      });
+    }
   }
 
   function copyTagsDown(fromIdx: number, count: number) {
     setCopyDownOpen(null);
+    const src = excelRows[fromIdx];
+    if (!src) return;
+    const targets = excelRows.slice(fromIdx + 1, fromIdx + 1 + count);
+    if (targets.length === 0) return;
+
+    const khName = khachHangList.find(k => String(k.id) === src.khach_hang_id)?.ten_cong_ty || '';
+    const nccName = nhaCungCapList.find(n => String(n.id) === src.nha_cung_cap_id)?.ten_nha_cung_cap || '';
+    const hdSo = hopDongList.find(h => String(h.id) === src.hop_dong_id)?.so_hop_dong || '';
     const khUpdates: Record<number, string> = {};
     const nccUpdates: Record<number, string> = {};
     const hdUpdates: Record<number, string> = {};
-    let copied = 0;
+    const copiedStts: number[] = [];
+    for (const target of targets) {
+      khUpdates[target.stt] = khName;
+      nccUpdates[target.stt] = nccName;
+      hdUpdates[target.stt] = hdSo;
+      copiedStts.push(target.stt);
+    }
 
-    setExcelRows(prev => {
-      const src = prev[fromIdx];
-      if (!src) return prev;
-      const khName = khachHangList.find(k => String(k.id) === src.khach_hang_id)?.ten_cong_ty || '';
-      const nccName = nhaCungCapList.find(n => String(n.id) === src.nha_cung_cap_id)?.ten_nha_cung_cap || '';
-      const hdSo = hopDongList.find(h => String(h.id) === src.hop_dong_id)?.so_hop_dong || '';
-      const next = [...prev];
-      for (let i = fromIdx + 1; i <= fromIdx + count && i < next.length; i++) {
-        const target = next[i];
-        next[i] = {
-          ...target,
-          khach_hang_id: src.khach_hang_id,
-          nha_cung_cap_id: src.nha_cung_cap_id,
-          hop_dong_id: src.hop_dong_id,
-          hang_muc_thu_chi_id: src.hang_muc_thu_chi_id,
-          ghi_chu: src.ghi_chu,
-        };
-        khUpdates[target.stt] = khName;
-        nccUpdates[target.stt] = nccName;
-        hdUpdates[target.stt] = hdSo;
-        copied++;
-      }
-      return next;
-    });
-    if (copied === 0) return;
+    const targetStts = new Set(copiedStts);
+    setExcelRows(prev => prev.map((row) => {
+      if (!targetStts.has(row.stt)) return row;
+      return {
+        ...row,
+        khach_hang_id: src.khach_hang_id,
+        nha_cung_cap_id: src.nha_cung_cap_id,
+        hop_dong_id: src.hop_dong_id,
+        hang_muc_thu_chi_id: src.hang_muc_thu_chi_id,
+        ghi_chu: src.ghi_chu,
+      };
+    }));
     setKhSearchMap(m => ({ ...m, ...khUpdates }));
     setNccSearchMap(m => ({ ...m, ...nccUpdates }));
     setHdSearchMap(m => ({ ...m, ...hdUpdates }));
-    addToast('success', `Đã copy tag cho ${copied} dòng bên dưới`);
+    if (src.hang_muc_thu_chi_id) {
+      copiedStts.unshift(src.stt);
+      selectImportStts(copiedStts, 'add');
+    }
+    addToast('success', `Đã copy tag cho ${targets.length} dòng bên dưới`);
   }
 
   useEffect(() => {
@@ -998,10 +1157,36 @@ export default function DongTienMoiList() {
     return () => document.removeEventListener('mousedown', handlePointerDown);
   }, [copyDownOpen]);
 
-  async function runImportExcel(skipStts: Set<number>) {
-    const validRows = excelRows.filter(r => r.valid);
+  function removeImportedRows(removeStts: Set<number>) {
+    setExcelRows(prev => prev.filter(r => !removeStts.has(r.stt)));
+    setSelectedImportStts(prev => {
+      const next = new Set(prev);
+      for (const stt of removeStts) next.delete(stt);
+      return next;
+    });
+    setKhSearchMap(m => {
+      const next = { ...m };
+      for (const stt of removeStts) delete next[stt];
+      return next;
+    });
+    setNccSearchMap(m => {
+      const next = { ...m };
+      for (const stt of removeStts) delete next[stt];
+      return next;
+    });
+    setHdSearchMap(m => {
+      const next = { ...m };
+      for (const stt of removeStts) delete next[stt];
+      return next;
+    });
+    clearImportDuplicateState();
+  }
+
+  async function runImportExcel(skipStts: Set<number>, rowsToImport: ExcelRow[]) {
+    const validRows = rowsToImport.filter(r => r.valid);
     const existingKeys = importExistingKeysRef.current;
     let ok = 0, skipped = 0, err = 0;
+    const importedStts = new Set<number>();
 
     for (const row of validRows) {
       if (skipStts.has(row.stt)) {
@@ -1051,6 +1236,7 @@ export default function DongTienMoiList() {
           nguon_du_lieu: 'import_excel',
         });
         existingKeys.add(dupKey);
+        importedStts.add(row.stt);
         ok++;
       } catch { err++; }
     }
@@ -1065,19 +1251,28 @@ export default function DongTienMoiList() {
       addToast('error', 'Không nhập được giao dịch nào');
     }
 
-    if (ok > 0) {
-      resetImportTagMaps();
-      clearImportDuplicateState();
-      setPasteText('');
-      setExcelRows([]);
+    if (ok > 0 || skipStts.size > 0) {
+      const removeStts = new Set<number>([...importedStts, ...skipStts]);
+      const remaining = excelRows.filter(r => !removeStts.has(r.stt));
+      removeImportedRows(removeStts);
+      if (remaining.length === 0) setPasteText('');
       fetchData();
     }
   }
 
+  function rowsChosenForImport(): ExcelRow[] {
+    if (selectedImportStts.size === 0) return [];
+    return excelRows.filter(r => r.valid && selectedImportStts.has(r.stt));
+  }
+
   async function handleImportExcel() {
     if (!importTaiKhoanId) { addToast('warning', 'Vui lòng chọn tài khoản'); return; }
-    const validRows = excelRows.filter(r => r.valid);
-    if (validRows.length === 0) { addToast('warning', 'Không có dòng hợp lệ'); return; }
+    if (selectedImportStts.size === 0) {
+      addToast('warning', 'Chọn dòng cần nhập — dùng “Chọn dòng đã gắn hạng mục”, khoảng STT, hoặc Shift+click');
+      return;
+    }
+    const validRows = rowsChosenForImport();
+    if (validRows.length === 0) { addToast('warning', 'Các dòng đã chọn không hợp lệ'); return; }
     setImporting(true);
     try {
       const dates = validRows.map(r => r.ngay_iso).filter(Boolean).sort();
@@ -1101,7 +1296,7 @@ export default function DongTienMoiList() {
         return;
       }
 
-      await runImportExcel(new Set());
+      await runImportExcel(new Set(), validRows);
     } catch {
       addToast('error', 'Lỗi khi nhập dữ liệu');
     } finally {
@@ -1111,16 +1306,16 @@ export default function DongTienMoiList() {
 
   async function handleImportSkipDuplicates() {
     const skipStts = new Set(importDuplicates.map(d => d.stt));
-    const remaining = excelRows.filter(r => r.valid && !skipStts.has(r.stt));
+    const remaining = rowsChosenForImport().filter(r => !skipStts.has(r.stt));
     if (remaining.length === 0) {
-      addToast('warning', 'Tất cả giao dịch đều trùng — không có gì để lưu');
+      addToast('warning', 'Tất cả giao dịch đã chọn đều trùng — không có gì để lưu');
       setImportDupDialogOpen(false);
       return;
     }
     setImportDupDialogOpen(false);
     setImporting(true);
     try {
-      await runImportExcel(skipStts);
+      await runImportExcel(skipStts, rowsChosenForImport());
     } catch {
       addToast('error', 'Lỗi khi nhập dữ liệu');
     } finally {
@@ -1129,8 +1324,11 @@ export default function DongTienMoiList() {
   }
 
   const validImportCount = excelRows.filter(r => r.valid).length;
+  const selectedValidCount = excelRows.filter(r => r.valid && selectedImportStts.has(r.stt)).length;
+  const completedImportCount = excelRows.filter(r => r.valid && r.hang_muc_thu_chi_id).length;
   const importDupSkipStts = new Set(importDuplicates.map(d => d.stt));
-  const importSaveableCount = excelRows.filter(r => r.valid && !importDupSkipStts.has(r.stt)).length;
+  const importSaveableCount = excelRows.filter(r => r.valid && selectedImportStts.has(r.stt) && !importDupSkipStts.has(r.stt)).length;
+  const allValidSelected = validImportCount > 0 && excelRows.filter(r => r.valid).every(r => selectedImportStts.has(r.stt));
 
   // ── Helpers ────────────────────────────────────────────────────────────────
   function getTaiKhoanLabel(id?: number | null) {
@@ -1214,20 +1412,97 @@ export default function DongTienMoiList() {
           <div className="flex-1 overflow-auto px-5 py-4">
             {excelRows.length > 0 ? (
               <div className="h-full flex flex-col">
-                <div className="flex items-center justify-between mb-2 flex-shrink-0">
-                  <span className="text-sm font-semibold text-teal-700">
-                    3. Kiểm tra & gắn tag
-                    <span className="ml-2 text-xs font-normal text-gray-500">{validImportCount}/{excelRows.length} hợp lệ</span>
-                  </span>
-                  <button onClick={() => { setPasteText(''); setExcelRows([]); resetImportTagMaps(); clearImportDuplicateState(); }}
-                    className="text-xs text-gray-400 hover:text-red-500 flex items-center gap-1">
-                    <X className="w-3 h-3" /> Xóa tất cả
-                  </button>
+                <div className="flex flex-col gap-2 mb-2 flex-shrink-0">
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <span className="text-sm font-semibold text-teal-700">
+                      3. Kiểm tra & gắn tag
+                      <span className="ml-2 text-xs font-normal text-gray-500">
+                        {validImportCount}/{excelRows.length} hợp lệ · {completedImportCount} đã gắn hạng mục · {selectedValidCount} đang chọn
+                      </span>
+                    </span>
+                    <button onClick={() => { setPasteText(''); setExcelRows([]); resetImportTagMaps(); clearImportDuplicateState(); }}
+                      className="text-xs text-gray-400 hover:text-red-500 flex items-center gap-1">
+                      <X className="w-3 h-3" /> Xóa tất cả
+                    </button>
+                  </div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={selectCompletedImportRows}
+                      className="px-2.5 py-1 rounded-md text-xs font-semibold bg-teal-600 text-white hover:bg-teal-700"
+                    >
+                      Chọn dòng đã gắn hạng mục
+                    </button>
+                    <button
+                      type="button"
+                      onClick={selectAllValidImportRows}
+                      className="px-2.5 py-1 rounded-md text-xs font-medium border border-teal-200 text-teal-700 hover:bg-teal-50"
+                    >
+                      Chọn tất cả hợp lệ
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedImportStts(new Set())}
+                      className="px-2.5 py-1 rounded-md text-xs font-medium border border-gray-200 text-gray-600 hover:bg-gray-50"
+                    >
+                      Bỏ chọn
+                    </button>
+                    <div className="flex items-center gap-1 text-xs text-gray-600">
+                      <span>STT</span>
+                      <input
+                        type="number"
+                        min={1}
+                        value={importRangeFrom}
+                        onChange={e => setImportRangeFrom(e.target.value)}
+                        className="w-14 px-1.5 py-1 border border-gray-200 rounded"
+                        placeholder="từ"
+                      />
+                      <span>→</span>
+                      <input
+                        type="number"
+                        min={1}
+                        value={importRangeTo}
+                        onChange={e => setImportRangeTo(e.target.value)}
+                        className="w-14 px-1.5 py-1 border border-gray-200 rounded"
+                        placeholder="đến"
+                      />
+                      <button
+                        type="button"
+                        onClick={selectImportRange}
+                        className="px-2 py-1 rounded-md text-xs font-medium bg-white border border-teal-200 text-teal-700 hover:bg-teal-50"
+                      >
+                        Chọn khoảng
+                      </button>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setHayDungManagerOpen(true)}
+                      className="ml-auto px-2.5 py-1 rounded-md text-xs font-medium border border-amber-200 text-amber-800 bg-amber-50 hover:bg-amber-100 flex items-center gap-1"
+                    >
+                      <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-500" />
+                      Ghim hạng mục hay dùng
+                    </button>
+                  </div>
+                  <p className="text-[11px] text-gray-500">
+                    Shift+click để chọn dải dòng. Chỉ các dòng đã chọn được nhập — phần chưa xong giữ lại trên bảng.
+                  </p>
                 </div>
                 <div className="overflow-x-auto rounded-lg border border-gray-200 flex-1">
                   <table className="w-full text-xs">
                     <thead className="sticky top-0 z-10">
                       <tr className="bg-teal-600 text-white">
+                        <th className="px-2 py-2 w-8 text-center">
+                          <input
+                            type="checkbox"
+                            checked={allValidSelected}
+                            onChange={() => {
+                              if (allValidSelected) setSelectedImportStts(new Set());
+                              else selectAllValidImportRows();
+                            }}
+                            title="Chọn / bỏ chọn tất cả dòng hợp lệ"
+                            className="rounded border-white/70"
+                          />
+                        </th>
                         <th className="px-2 py-2 w-8 text-center">STT</th>
                         <th className="px-2 py-2 w-32 text-left">NGÀY GD</th>
                         <th className="px-2 py-2 w-56 text-left">DIỄN GIẢI</th>
@@ -1260,22 +1535,42 @@ export default function DongTienMoiList() {
                         const isCopyOpen = copyDownOpen === row.stt;
                         const rowsBelow = excelRows.length - 1 - idx;
                         const isDuplicate = importDuplicateStts.has(row.stt);
+                        const isSelected = selectedImportStts.has(row.stt);
                         const rowBg = !row.valid
                           ? 'bg-rose-50 hover:bg-rose-100'
                           : isDuplicate
                             ? 'bg-amber-50 hover:bg-amber-100'
-                            : idx % 2 === 0
-                              ? 'bg-sky-50 hover:bg-sky-100'
-                              : 'bg-indigo-50 hover:bg-indigo-100';
+                            : isSelected
+                              ? 'bg-teal-100 hover:bg-teal-200'
+                              : idx % 2 === 0
+                                ? 'bg-sky-50 hover:bg-sky-100'
+                                : 'bg-indigo-50 hover:bg-indigo-100';
                         const tagCellBg = !row.valid
                           ? 'bg-rose-100'
                           : isDuplicate
                             ? 'bg-amber-100'
-                            : idx % 2 === 0
-                              ? 'bg-sky-100'
-                              : 'bg-indigo-100';
+                            : isSelected
+                              ? 'bg-teal-200'
+                              : idx % 2 === 0
+                                ? 'bg-sky-100'
+                                : 'bg-indigo-100';
                         return (
                           <tr key={row.stt} className={rowBg}>
+                            <td className="px-2 py-1 text-center">
+                              <input
+                                type="checkbox"
+                                disabled={!row.valid}
+                                checked={isSelected}
+                                onClick={e => {
+                                  e.preventDefault();
+                                  if (!row.valid) return;
+                                  toggleImportRow(idx, row.stt, !isSelected, e.shiftKey);
+                                }}
+                                onChange={() => { /* controlled via onClick for Shift+click range */ }}
+                                className="rounded border-gray-300 disabled:opacity-40"
+                                title={row.valid ? 'Shift+click để chọn khoảng' : 'Dòng không hợp lệ'}
+                              />
+                            </td>
                             <td className="px-2 py-1 text-center text-gray-500">{row.stt}</td>
                             <td className="px-2 py-1 whitespace-nowrap">
                               <span className={`text-xs font-medium ${row.ngay_iso ? 'text-teal-700' : 'text-red-500'}`}>
@@ -1308,7 +1603,7 @@ export default function DongTienMoiList() {
                                 className="w-full text-xs px-1.5 py-1 border border-teal-200 rounded focus:outline-none focus:border-teal-500 bg-white disabled:bg-gray-100 disabled:text-gray-400"
                               >
                                 <option value="">{importTaiKhoanId ? '— Hạng mục —' : 'Chọn TK trước'}</option>
-                                {renderHangMucSelectOptions(hmOptions)}
+                                {renderHangMucSelectOptions(hmOptions, { hayDungIds: hangMucHayDungIds })}
                               </select>
                             </td>
                             {/* KH — thu: KH+HĐ; chi HĐ/công trình: KH+NCC+HĐ */}
@@ -1515,7 +1810,14 @@ export default function DongTienMoiList() {
                               )}
                             </td>
                             <td className="px-1 py-1 text-center">
-                              <button onClick={() => setExcelRows(prev => prev.filter(r => r.stt !== row.stt))}
+                              <button onClick={() => {
+                                setExcelRows(prev => prev.filter(r => r.stt !== row.stt));
+                                setSelectedImportStts(prev => {
+                                  const next = new Set(prev);
+                                  next.delete(row.stt);
+                                  return next;
+                                });
+                              }}
                                 className="p-0.5 rounded text-gray-300 hover:text-red-500 hover:bg-red-50">
                                 <X className="w-3.5 h-3.5" />
                               </button>
@@ -1538,12 +1840,19 @@ export default function DongTienMoiList() {
           </div>
 
           <div className="flex-shrink-0 px-5 py-3 border-t border-gray-200 bg-gray-50 flex items-center gap-3">
-            <button onClick={handleImportExcel} disabled={importing || validImportCount === 0 || !importTaiKhoanId}
+            <button onClick={handleImportExcel} disabled={importing || selectedValidCount === 0 || !importTaiKhoanId}
               className="flex items-center gap-2 px-5 py-2 bg-teal-600 text-white rounded-lg text-sm font-bold hover:bg-teal-700 transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed">
               <Save className="w-4 h-4" />
-              {importing ? 'Đang nhập...' : validImportCount > 0 ? `Nhập ${validImportCount} giao dịch` : 'Nhập vào hệ thống'}
+              {importing
+                ? 'Đang nhập...'
+                : selectedValidCount > 0
+                  ? `Nhập ${selectedValidCount} dòng đã chọn`
+                  : 'Chọn dòng để nhập'}
             </button>
             {!importTaiKhoanId && <span className="text-xs text-amber-600 font-medium">Vui lòng chọn tài khoản trước</span>}
+            {importTaiKhoanId && selectedValidCount === 0 && validImportCount > 0 && (
+              <span className="text-xs text-amber-600 font-medium">Chọn dòng đã hoàn thiện rồi nhập — bảng còn lại giữ nguyên</span>
+            )}
             <button onClick={() => { setShowImport(false); setPasteText(''); setExcelRows([]); resetImportTagMaps(); clearImportDuplicateState(); }}
               className="ml-auto flex items-center gap-2 px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-100">
               <X className="w-4 h-4" /> Đóng
@@ -1642,7 +1951,7 @@ export default function DongTienMoiList() {
                 <label className="block text-xs font-medium text-gray-500 mb-1">Hạng mục</label>
                 <select value={filters.hang_muc_thu_chi_id} onChange={e => setFilters(f => ({ ...f, hang_muc_thu_chi_id: e.target.value }))} className="select-field w-full">
                   <option value="">Tất cả</option>
-                  {renderHangMucSelectOptions(buildHangMucOptions(hangMucList))}
+                  {renderHangMucSelectOptions(buildHangMucOptions(hangMucList), { hayDungIds: hangMucHayDungIds })}
                 </select>
               </div>
               <div>
@@ -1904,34 +2213,58 @@ export default function DongTienMoiList() {
           </div>
 
           <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Hạng mục thu chi</label>
-              <select value={form.hang_muc_thu_chi_id}
-                onChange={e => {
-                  const v = e.target.value;
-                  setForm((f) => {
-                    const wasShow = showDoiTuongTagFields(f.hang_muc_thu_chi_id, hangMucList);
-                    const nowShow = showDoiTuongTagFields(v, hangMucList);
-                    const isCk = isHangMucChuyenKhoanNoiBo(v, hangMucList);
-                    const leavingCk = f.loai_giao_dich === 'chuyen_khoan_noi_bo' && !isCk;
-                    return {
-                      ...f,
-                      hang_muc_thu_chi_id: v,
-                      loai_giao_dich: isCk
-                        ? 'chuyen_khoan_noi_bo'
-                        : leavingCk
-                          ? 'chi'
-                          : f.loai_giao_dich,
-                      ...(leavingCk ? { tai_khoan_nhan_id: '' } : {}),
-                      ...(wasShow !== nowShow
-                        ? { khach_hang_id: '', hop_dong_id: '', nha_cung_cap_id: '', hop_dong_mua_id: '' }
-                        : {}),
-                    };
-                  });
-                }}
-                className="select-field w-full">
-                <option value="">-- Chọn hạng mục --</option>
-                {renderHangMucSelectOptions(hangMucOptions, 2)}
-              </select>
+              <div className="flex items-center justify-between mb-1 gap-2">
+                <label className="block text-sm font-medium text-gray-700">Hạng mục thu chi</label>
+                <button
+                  type="button"
+                  onClick={() => setHayDungManagerOpen(true)}
+                  className="text-xs text-amber-800 hover:text-amber-900 flex items-center gap-1"
+                >
+                  <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-500" />
+                  Ghim hay dùng
+                </button>
+              </div>
+              <div className="flex items-center gap-2">
+                <select value={form.hang_muc_thu_chi_id}
+                  onChange={e => {
+                    const v = e.target.value;
+                    setForm((f) => {
+                      const wasShow = showDoiTuongTagFields(f.hang_muc_thu_chi_id, hangMucList);
+                      const nowShow = showDoiTuongTagFields(v, hangMucList);
+                      const isCk = isHangMucChuyenKhoanNoiBo(v, hangMucList);
+                      const leavingCk = f.loai_giao_dich === 'chuyen_khoan_noi_bo' && !isCk;
+                      return {
+                        ...f,
+                        hang_muc_thu_chi_id: v,
+                        loai_giao_dich: isCk
+                          ? 'chuyen_khoan_noi_bo'
+                          : leavingCk
+                            ? 'chi'
+                            : f.loai_giao_dich,
+                        ...(leavingCk ? { tai_khoan_nhan_id: '' } : {}),
+                        ...(wasShow !== nowShow
+                          ? { khach_hang_id: '', hop_dong_id: '', nha_cung_cap_id: '', hop_dong_mua_id: '' }
+                          : {}),
+                      };
+                    });
+                  }}
+                  className="select-field w-full">
+                  <option value="">-- Chọn hạng mục --</option>
+                  {renderHangMucSelectOptions(hangMucOptions, { indentMultiplier: 2, hayDungIds: hangMucHayDungIds })}
+                </select>
+                <button
+                  type="button"
+                  disabled={!form.hang_muc_thu_chi_id}
+                  onClick={() => {
+                    if (!form.hang_muc_thu_chi_id) return;
+                    setHangMucHayDung(toggleHangMucHayDung(hangMucHayDungIds, Number(form.hang_muc_thu_chi_id)));
+                  }}
+                  title={hangMucHayDungIds.includes(Number(form.hang_muc_thu_chi_id)) ? 'Bỏ ghim hạng mục này' : 'Ghim hạng mục đang chọn lên đầu'}
+                  className="p-2 rounded-lg border border-gray-200 text-gray-400 hover:bg-amber-50 disabled:opacity-40 disabled:cursor-not-allowed flex-shrink-0"
+                >
+                  <Star className={`w-4 h-4 ${hangMucHayDungIds.includes(Number(form.hang_muc_thu_chi_id)) ? 'fill-amber-400 text-amber-500' : ''}`} />
+                </button>
+              </div>
               {isPersonalTaiKhoan && form.loai_giao_dich === 'thu' && (
                 <p className="mt-1 text-xs text-violet-600">
                   Tài khoản cá nhân: ưu tiên Vay nợ / Thu khác / Chuyển khoản nội bộ
@@ -2126,6 +2459,14 @@ export default function DongTienMoiList() {
         confirmText="Xóa"
         cancelText="Hủy"
         variant="danger"
+      />
+
+      <HangMucHayDungManager
+        open={hayDungManagerOpen}
+        onOpenChange={setHayDungManagerOpen}
+        hangMucList={hangMucList}
+        pinnedIds={hangMucHayDungIds}
+        onChange={setHangMucHayDung}
       />
     </div>
   );
