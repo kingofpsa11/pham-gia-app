@@ -28,6 +28,8 @@ import googleDriveRouter from './routes/google-drive.js';
 import cauHinhRouter from './routes/cau-hinh.js';
 import usersRouter from './routes/users.js';
 import { ensureSchema } from './utils/ensureSchema.js';
+import { requireAdmin, requireAuth } from './middleware/auth.js';
+import { getJwtSecret } from './utils/jwtSecret.js';
 
 dotenv.config();
 
@@ -63,7 +65,7 @@ app.get('/api/health', async (_req, res) => {
   }
 });
 
-app.get('/api/tables', async (_req, res) => {
+app.get('/api/tables', requireAdmin, async (_req, res) => {
   try {
     const rows = await query(
       `SELECT TABLE_NAME AS table_name
@@ -80,6 +82,8 @@ app.get('/api/tables', async (_req, res) => {
 });
 
 app.use('/api/auth', authRouter);
+app.use('/api', googleDriveRouter);
+app.use('/api', requireAuth);
 app.use('/api', dashboardRouter);
 app.use('/api', khachHangRouter);
 app.use('/api', baoGiaRouter);
@@ -99,7 +103,6 @@ app.use('/api', nhaCungCapRouter);
 app.use('/api', hopDongMuaRouter);
 app.use('/api', dongTienMoiRouter);
 app.use('/api', congNoRouter);
-app.use('/api', googleDriveRouter);
 app.use('/api', cauHinhRouter);
 app.use('/api', usersRouter);
 
@@ -117,7 +120,13 @@ app.use((_req, res) => {
   res.status(404).json({ error: 'Not found' });
 });
 
-app.listen(PORT, async () => {
+export function createApp() {
+  return app;
+}
+
+export async function startServer(port = PORT) {
+  getJwtSecret();
+  return app.listen(port, async () => {
   try {
     await ensureSchema();
   } catch (err) {
@@ -136,4 +145,10 @@ app.listen(PORT, async () => {
   console.log(`  Dòng tiền/HĐ: http://localhost:${PORT}/api/dong-tien-by?hop_dong_id=...`);
   console.log(`  BG/KH:   http://localhost:${PORT}/api/bao-gia-by?khach_hang_id=...`);
   console.log(`  HĐ/KH:   http://localhost:${PORT}/api/hop-dong-by?khach_hang_id=...`);
-});
+  });
+}
+
+const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (isMain) {
+  startServer();
+}

@@ -86,3 +86,16 @@ export function parseNgayGiaoDich(raw) {
 
   return nowWallClockString();
 }
+
+export function parseNgayGiaoDichForUpdate(raw, existingRaw) {
+  const s = String(raw || '').trim();
+  if (!s) return parseNgayGiaoDich(existingRaw);
+
+  const isoDateOnly = s.match(/^(\d{4}-\d{2}-\d{2})$/);
+  const existingTime = String(existingRaw || '').match(/[ T](\d{2}:\d{2}:\d{2})/);
+  if (isoDateOnly && existingTime) {
+    return `${isoDateOnly[1]} ${existingTime[1]}`;
+  }
+
+  return parseNgayGiaoDich(raw);
+}
