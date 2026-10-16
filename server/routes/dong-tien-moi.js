@@ -3,11 +3,45 @@ import { query, queryOne } from '../db.js';
 import { dbErrorResponse } from '../utils/errors.js';
 import { parsePaging, sqlLimitOffset } from '../utils/pagination.js';
 import { parseNgayGiaoDich, parseNgayHachToan } from '../utils/dongTienDate.js';
+import { patchNullable, patchNumber, patchValue } from '../utils/patchMerge.js';
 
 const router = Router();
 
 function insertId(result) {
   return Number(result?.insertId ?? result?.[0]?.insertId);
+}
+
+function mergeDongTienUpdate(existing, body) {
+  const hasNgayGiaoDich = Object.prototype.hasOwnProperty.call(body, 'ngay_giao_dich');
+  const ngayGiaoDich = hasNgayGiaoDich
+    ? parseNgayGiaoDich(body.ngay_giao_dich)
+    : existing.ngay_giao_dich;
+  const ngayHachToan = hasNgayGiaoDich
+    ? parseNgayHachToan(body.ngay_giao_dich)
+    : existing.ngay_hach_toan;
+
+  return {
+    ngay_giao_dich: ngayGiaoDich,
+    ngay_hach_toan: ngayHachToan,
+    loai_giao_dich: patchValue(body, existing, 'loai_giao_dich'),
+    chieu_tien: patchNullable(body, existing, 'chieu_tien'),
+    tai_khoan_tien_id: patchValue(body, existing, 'tai_khoan_tien_id'),
+    tai_khoan_nhan_id: patchNullable(body, existing, 'tai_khoan_nhan_id'),
+    so_tien: patchNumber(body, existing, 'so_tien'),
+    doi_tuong_id: patchNullable(body, existing, 'doi_tuong_id'),
+    khach_hang_id: patchNullable(body, existing, 'khach_hang_id'),
+    nha_cung_cap_id: patchNullable(body, existing, 'nha_cung_cap_id'),
+    hop_dong_id: patchNullable(body, existing, 'hop_dong_id'),
+    hop_dong_mua_id: patchNullable(body, existing, 'hop_dong_mua_id'),
+    hang_muc_thu_chi_id: patchNullable(body, existing, 'hang_muc_thu_chi_id'),
+    mo_ta_giao_dich: patchNullable(body, existing, 'mo_ta_giao_dich'),
+    so_tai_khoan_doi_ung: patchNullable(body, existing, 'so_tai_khoan_doi_ung'),
+    ten_tai_khoan_doi_ung: patchNullable(body, existing, 'ten_tai_khoan_doi_ung'),
+    so_du_sau_giao_dich: patchValue(body, existing, 'so_du_sau_giao_dich'),
+    ma_giao_dich_ngan_hang: patchNullable(body, existing, 'ma_giao_dich_ngan_hang'),
+    ghi_chu: patchNullable(body, existing, 'ghi_chu'),
+    trang_thai: patchValue(body, existing, 'trang_thai') || 'hoan_thanh',
+  };
 }
 
 const LIST_SELECT = `
@@ -224,49 +258,55 @@ router.post('/dong-tien-moi/bulk-update', async (req, res) => {
       const item = items[i] || {};
       const excelRow = item._excelRow || i + 2;
       try {
-        const ngayGD = parseNgayGiaoDich(item.ngay_giao_dich);
-        const ngayHT = parseNgayHachToan(item.ngay_giao_dich);
-        const soTien = Number(item.so_tien) || 0;
-        if (!item.loai_giao_dich || !item.tai_khoan_tien_id || soTien <= 0) {
-          throw new Error('Thiếu loại GD, tài khoản hoặc số tiền');
-        }
-
         if (item.id) {
-          const exists = await queryOne('SELECT id FROM dong_tien_moi WHERE id = ?', [item.id]);
-          if (!exists) throw new Error(`Không tìm thấy ID ${item.id}`);
+          const existing = await queryOne('SELECT * FROM dong_tien_moi WHERE id = ?', [item.id]);
+          if (!existing) throw new Error(`Không tìm thấy ID ${item.id}`);
+          const merged = mergeDongTienUpdate(existing, item);
+          const mergedSoTien = Number(merged.so_tien) || 0;
+          if (!merged.loai_giao_dich || !merged.tai_khoan_tien_id || mergedSoTien <= 0) {
+            throw new Error('Thiếu loại GD, tài khoản hoặc số tiền');
+          }
 
           await query(
             `UPDATE dong_tien_moi SET
               ngay_giao_dich=?, ngay_hach_toan=?, loai_giao_dich=?, chieu_tien=?, tai_khoan_tien_id=?, tai_khoan_nhan_id=?,
-              so_tien=?, hang_muc_thu_chi_id=?, mo_ta_giao_dich=?, khach_hang_id=?, nha_cung_cap_id=?,
+              so_tien=?, doi_tuong_id=?, hang_muc_thu_chi_id=?, mo_ta_giao_dich=?, khach_hang_id=?, nha_cung_cap_id=?,
               hop_dong_id=?, hop_dong_mua_id=?, so_tai_khoan_doi_ung=?, ten_tai_khoan_doi_ung=?,
               so_du_sau_giao_dich=?, ma_giao_dich_ngan_hang=?, ghi_chu=?, trang_thai=?
              WHERE id=?`,
             [
-              ngayGD,
-              ngayHT,
-              item.loai_giao_dich,
-              item.chieu_tien || null,
-              item.tai_khoan_tien_id,
-              item.tai_khoan_nhan_id || null,
-              soTien,
-              item.hang_muc_thu_chi_id || null,
-              item.mo_ta_giao_dich || null,
-              item.khach_hang_id || null,
-              item.nha_cung_cap_id || null,
-              item.hop_dong_id || null,
-              item.hop_dong_mua_id || null,
-              item.so_tai_khoan_doi_ung || null,
-              item.ten_tai_khoan_doi_ung || null,
-              item.so_du_sau_giao_dich ?? null,
-              item.ma_giao_dich_ngan_hang || null,
-              item.ghi_chu || null,
-              item.trang_thai || 'hoan_thanh',
+              merged.ngay_giao_dich,
+              merged.ngay_hach_toan,
+              merged.loai_giao_dich,
+              merged.chieu_tien,
+              merged.tai_khoan_tien_id,
+              merged.tai_khoan_nhan_id,
+              mergedSoTien,
+              merged.doi_tuong_id,
+              merged.hang_muc_thu_chi_id,
+              merged.mo_ta_giao_dich,
+              merged.khach_hang_id,
+              merged.nha_cung_cap_id,
+              merged.hop_dong_id,
+              merged.hop_dong_mua_id,
+              merged.so_tai_khoan_doi_ung,
+              merged.ten_tai_khoan_doi_ung,
+              merged.so_du_sau_giao_dich,
+              merged.ma_giao_dich_ngan_hang,
+              merged.ghi_chu,
+              merged.trang_thai,
               item.id,
             ]
           );
           updated++;
         } else {
+          const ngayGD = parseNgayGiaoDich(item.ngay_giao_dich);
+          const ngayHT = parseNgayHachToan(item.ngay_giao_dich);
+          const soTien = Number(item.so_tien) || 0;
+          if (!item.loai_giao_dich || !item.tai_khoan_tien_id || soTien <= 0) {
+            throw new Error('Thiếu loại GD, tài khoản hoặc số tiền');
+          }
+
           const now = new Date();
           const maGD = `GD${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}${String(now.getTime()).slice(-6)}${i}`;
           await query(
@@ -314,31 +354,32 @@ router.put('/dong-tien-moi/:id', async (req, res) => {
   try {
     const id = req.params.id;
     const body = req.body || {};
-    const ngayGD = parseNgayGiaoDich(body.ngay_giao_dich);
-    const ngayHT = parseNgayHachToan(body.ngay_giao_dich);
+    const existing = await queryOne('SELECT * FROM dong_tien_moi WHERE id = ?', [id]);
+    if (!existing) return res.status(404).json({ error: 'Not found' });
+    const merged = mergeDongTienUpdate(existing, body);
     await query(
       `UPDATE dong_tien_moi SET ngay_giao_dich=?, ngay_hach_toan=?, loai_giao_dich=?, chieu_tien=?, tai_khoan_tien_id=?, tai_khoan_nhan_id=?, so_tien=?, doi_tuong_id=?, khach_hang_id=?, nha_cung_cap_id=?, hop_dong_id=?, hop_dong_mua_id=?, hang_muc_thu_chi_id=?, mo_ta_giao_dich=?, so_tai_khoan_doi_ung=?, ten_tai_khoan_doi_ung=?, so_du_sau_giao_dich=?, ma_giao_dich_ngan_hang=?, ghi_chu=?, trang_thai=? WHERE id=?`,
       [
-        ngayGD,
-        ngayHT,
-        body.loai_giao_dich,
-        body.chieu_tien || null,
-        body.tai_khoan_tien_id,
-        body.tai_khoan_nhan_id || null,
-        Number(body.so_tien) || 0,
-        body.doi_tuong_id || null,
-        body.khach_hang_id || null,
-        body.nha_cung_cap_id || null,
-        body.hop_dong_id || null,
-        body.hop_dong_mua_id || null,
-        body.hang_muc_thu_chi_id || null,
-        body.mo_ta_giao_dich || null,
-        body.so_tai_khoan_doi_ung || null,
-        body.ten_tai_khoan_doi_ung || null,
-        body.so_du_sau_giao_dich ?? null,
-        body.ma_giao_dich_ngan_hang ?? null,
-        body.ghi_chu || null,
-        body.trang_thai || 'hoan_thanh',
+        merged.ngay_giao_dich,
+        merged.ngay_hach_toan,
+        merged.loai_giao_dich,
+        merged.chieu_tien,
+        merged.tai_khoan_tien_id,
+        merged.tai_khoan_nhan_id,
+        merged.so_tien,
+        merged.doi_tuong_id,
+        merged.khach_hang_id,
+        merged.nha_cung_cap_id,
+        merged.hop_dong_id,
+        merged.hop_dong_mua_id,
+        merged.hang_muc_thu_chi_id,
+        merged.mo_ta_giao_dich,
+        merged.so_tai_khoan_doi_ung,
+        merged.ten_tai_khoan_doi_ung,
+        merged.so_du_sau_giao_dich,
+        merged.ma_giao_dich_ngan_hang,
+        merged.ghi_chu,
+        merged.trang_thai,
         id,
       ]
     );

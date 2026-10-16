@@ -27,6 +27,7 @@ import congNoRouter from './routes/cong-no.js';
 import googleDriveRouter from './routes/google-drive.js';
 import cauHinhRouter from './routes/cau-hinh.js';
 import usersRouter from './routes/users.js';
+import { requireAuth, requireAdmin } from './middleware/auth.js';
 import { ensureSchema } from './utils/ensureSchema.js';
 
 dotenv.config();
@@ -63,7 +64,7 @@ app.get('/api/health', async (_req, res) => {
   }
 });
 
-app.get('/api/tables', async (_req, res) => {
+app.get('/api/tables', requireAdmin, async (_req, res) => {
   try {
     const rows = await query(
       `SELECT TABLE_NAME AS table_name
@@ -80,6 +81,17 @@ app.get('/api/tables', async (_req, res) => {
 });
 
 app.use('/api/auth', authRouter);
+
+const publicApiPaths = new Set([
+  '/google-drive/callback',
+  '/google/callback',
+]);
+
+app.use('/api', (req, res, next) => {
+  if (publicApiPaths.has(req.path)) return next();
+  return requireAuth(req, res, next);
+});
+
 app.use('/api', dashboardRouter);
 app.use('/api', khachHangRouter);
 app.use('/api', baoGiaRouter);
