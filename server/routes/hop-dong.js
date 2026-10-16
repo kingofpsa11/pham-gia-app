@@ -40,6 +40,17 @@ async function loadHopDongJoined(id) {
   return queryOne(`${HD_JOIN_SELECT} WHERE hd.id = ?`, [id]);
 }
 
+export async function deleteHopDongCascade(runQuery, id) {
+  await runQuery(
+    `DELETE FROM phu_luc_hop_dong_chi_tiet
+     WHERE phu_luc_id IN (SELECT id FROM phu_luc_hop_dong WHERE hop_dong_id = ?)`,
+    [id],
+  );
+  await runQuery('DELETE FROM phu_luc_hop_dong WHERE hop_dong_id = ?', [id]);
+  await runQuery('DELETE FROM hop_dong_chi_tiet WHERE hop_dong_id = ?', [id]);
+  await runQuery('DELETE FROM hop_dong WHERE id = ?', [id]);
+}
+
 async function attachDriveFolders(req, hopDongId, { forceNew = false } = {}) {
   try {
     const row = await loadHopDongJoined(hopDongId);
@@ -388,8 +399,7 @@ router.post('/hop-dong/:id/tao-folder', async (req, res) => {
 router.delete('/hop-dong/:id', async (req, res) => {
   try {
     const id = req.params.id;
-    await query('DELETE FROM hop_dong_chi_tiet WHERE hop_dong_id = ?', [id]);
-    await query('DELETE FROM hop_dong WHERE id = ?', [id]);
+    await deleteHopDongCascade(query, id);
     return res.json({ success: true });
   } catch (err) {
     return dbErrorResponse(res, err, 'Không thể xóa hợp đồng');

@@ -67,6 +67,7 @@ export async function loadDaGiaoMap(connOrNull, hopDongId) {
 
 export function normalizeChiTietInput(bodyLines, hdChiTiet) {
   const byId = new Map((hdChiTiet || []).map((r) => [String(r.id), r]));
+  const seenExistingIds = new Set();
   const out = [];
   for (const raw of bodyLines || []) {
     const hdctId = raw.hop_dong_chi_tiet_id ? Number(raw.hop_dong_chi_tiet_id) : null;
@@ -81,6 +82,13 @@ export function normalizeChiTietInput(bodyLines, hdChiTiet) {
     if (!ten) throw new Error('Thiếu tên sản phẩm trên một dòng phụ lục');
     if (soLuongMoi < 0) {
       throw new Error(`Số lượng mới của "${ten}" không được âm`);
+    }
+    if (existing) {
+      const key = String(existing.id);
+      if (seenExistingIds.has(key)) {
+        throw new Error(`Dòng hợp đồng "${ten}" bị trùng trong phụ lục`);
+      }
+      seenExistingIds.add(key);
     }
 
     out.push({
