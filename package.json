@@ -9,6 +9,7 @@
     "start": "node server/index.js",
     "update-admin-email": "node server/scripts/update-admin-email.js",
     "reset-admin-password": "node server/scripts/reset-admin-password.js",
+    "test": "node --test server/*.test.js",
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview",
