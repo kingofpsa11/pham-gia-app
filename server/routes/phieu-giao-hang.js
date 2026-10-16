@@ -80,6 +80,22 @@ async function khachHangIdFromHopDong(hopDongId) {
   return hd?.khach_hang_id ?? null;
 }
 
+function hasOwn(obj, key) {
+  return Object.prototype.hasOwnProperty.call(obj || {}, key);
+}
+
+export function mergePhieuGiaoHangUpdate(existing, body, { khachHangId, giaTriGhiNo } = {}) {
+  return {
+    so_phieu: hasOwn(body, 'so_phieu') ? body.so_phieu : existing.so_phieu,
+    ngay_giao: hasOwn(body, 'ngay_giao') ? body.ngay_giao : existing.ngay_giao,
+    khach_hang_id: khachHangId ?? existing.khach_hang_id,
+    hop_dong_id: hasOwn(body, 'hop_dong_id') ? body.hop_dong_id : existing.hop_dong_id,
+    gia_tri_ghi_no: Array.isArray(body?.chi_tiet) ? (giaTriGhiNo ?? 0) : existing.gia_tri_ghi_no,
+    noi_dung: hasOwn(body, 'noi_dung') ? (body.noi_dung || '') : (existing.noi_dung || ''),
+    nguoi_tao: hasOwn(body, 'nguoi_tao') ? (body.nguoi_tao || '') : (existing.nguoi_tao || ''),
+  };
+}
+
 router.get('/phieu-giao-hang/so-tiep-theo', async (req, res) => {
   try {
     const nam = parseInt(String(req.query.nam || ''), 10) || new Date().getFullYear();
@@ -226,31 +242,41 @@ router.put('/phieu-giao-hang/:id', async (req, res) => {
   try {
     const id = req.params.id;
     const body = req.body || {};
-    if (!body.hop_dong_id) {
+    const existing = await queryOne('SELECT * FROM phieu_giao_hang WHERE id = ?', [id]);
+    if (!existing) return res.status(404).json({ error: 'Not found' });
+
+    const hopDongId = hasOwn(body, 'hop_dong_id') ? body.hop_dong_id : existing.hop_dong_id;
+    if (!hopDongId) {
       return res.status(400).json({ error: 'Phiếu giao hàng phải liên kết với hợp đồng' });
     }
-    const khachHangId = body.khach_hang_id || await khachHangIdFromHopDong(body.hop_dong_id);
-    const giaTriGhiNo = body.chi_tiet?.length
-      ? await calcGiaTriGhiNoFromChiTiet(body.chi_tiet, body.hop_dong_id)
-      : 0;
+    const khachHangId = body.khach_hang_id
+      ?? (await khachHangIdFromHopDong(hopDongId))
+      ?? existing.khach_hang_id;
+    let giaTriGhiNo = existing.gia_tri_ghi_no;
+    if (Array.isArray(body.chi_tiet)) {
+      giaTriGhiNo = body.chi_tiet.length
+        ? await calcGiaTriGhiNoFromChiTiet(body.chi_tiet, hopDongId)
+        : 0;
+    }
+    const merged = mergePhieuGiaoHangUpdate(existing, body, { khachHangId, giaTriGhiNo });
 
     await query(
       `UPDATE phieu_giao_hang
        SET so_phieu=?, ngay_giao=?, khach_hang_id=?, hop_dong_id=?, gia_tri_ghi_no=?, noi_dung=?, nguoi_tao=?
        WHERE id=?`,
       [
-        body.so_phieu,
-        body.ngay_giao,
-        khachHangId,
-        body.hop_dong_id || null,
-        giaTriGhiNo,
-        body.noi_dung || '',
-        body.nguoi_tao || '',
+        merged.so_phieu,
+        merged.ngay_giao,
+        merged.khach_hang_id,
+        merged.hop_dong_id || null,
+        merged.gia_tri_ghi_no,
+        merged.noi_dung,
+        merged.nguoi_tao,
         id,
       ]
     );
 
-    if (body.chi_tiet) {
+    if (Array.isArray(body.chi_tiet)) {
       await query('DELETE FROM phieu_giao_hang_chi_tiet WHERE phieu_giao_hang_id = ?', [id]);
       for (const ct of body.chi_tiet) {
         await query(

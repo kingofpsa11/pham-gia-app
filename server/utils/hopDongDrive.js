@@ -7,10 +7,8 @@ import {
   getDriveFile,
   listChildFolders,
   listDirectItems,
-  findAllFoldersNamed,
   findFoldersByNames,
   resolveToFolder,
-  moveToParent,
   ensureChildFolder,
   createDriveFolder,
   renameDriveFile,
@@ -188,6 +186,14 @@ export async function findPhamGiaRoot(accessToken, cache) {
   return best;
 }
 
+export function findDirectYearFolder(folders, yearName, parentId) {
+  return (folders || []).find(
+    (f) => isDriveFolder(f)
+      && driveNamesEqual(f.name, yearName)
+      && (f.parents || []).includes(parentId),
+  );
+}
+
 async function ensureYearFolder(accessToken, nam, cache) {
   const yearName = String(nam);
   const root = await findPhamGiaRoot(accessToken, cache);
@@ -197,29 +203,13 @@ async function ensureYearFolder(accessToken, nam, cache) {
 
   cache.years = cache.years || {};
   const here = await listDirectItems(accessToken, root.id, 25);
-  const yearHere = here.find((f) => isDriveFolder(f) && driveNamesEqual(f.name, yearName));
+  const yearHere = findDirectYearFolder(here, yearName, root.id);
   if (yearHere) {
     cache.years[yearName] = { id: yearHere.id, parentId: root.id };
     cache.rootId = root.id;
     await saveCache(cache);
     console.log('Drive year folder in Phạm Gia:', yearHere.id);
     return yearHere;
-  }
-
-  const named = await findAllFoldersNamed(accessToken, yearName, 50);
-  if (named.length) {
-    const underRoot = named.filter((f) => (f.parents || []).includes(root.id));
-    const oldest = [...named].sort((a, b) =>
-      String(a.createdTime || '').localeCompare(String(b.createdTime || '')),
-    )[0];
-    let yearFolder = underRoot[0] || oldest;
-    const moved = await moveToParent(accessToken, yearFolder.id, root.id);
-    if (isDriveFolder(moved)) yearFolder = moved;
-    cache.years[yearName] = { id: yearFolder.id, parentId: root.id };
-    cache.rootId = root.id;
-    await saveCache(cache);
-    console.log('Drive year folder moved/reused:', { yearId: yearFolder.id, found: named.length });
-    return yearFolder;
   }
 
   const yearFolder = await createDriveFolder(accessToken, yearName, root.id);
