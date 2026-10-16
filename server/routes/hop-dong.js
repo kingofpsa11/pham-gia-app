@@ -370,7 +370,7 @@ router.post('/hop-dong/:id/tao-folder', async (req, res) => {
     if (tenFolder) {
       await query('UPDATE hop_dong SET ten_folder_du_an = ? WHERE id = ?', [tenFolder, id]);
     }
-    const attached = await attachDriveFolders(req, id, { forceNew: true });
+    const attached = await attachDriveFolders(req, id, { forceNew: false });
     if (!attached.data) return res.status(404).json({ error: 'Not found' });
     if (attached.warning && !attached.drive?.id_folder) {
       return res.status(400).json({ error: attached.warning, drive_warning: attached.warning });

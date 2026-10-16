@@ -349,6 +349,10 @@ export async function ensureBaoGiaDriveFolders({ userId, baoGia, tenKhachHang, s
           warning: subWarning || undefined,
         };
       }
+      return {
+        warning:
+          'Không truy cập được thư mục Google Drive đã lưu. Kiểm tra quyền truy cập hoặc xóa ID folder trước khi tạo thư mục mới.',
+      };
     }
 
     const cache = await loadCache();
