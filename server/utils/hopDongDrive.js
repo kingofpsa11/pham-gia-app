@@ -7,10 +7,8 @@ import {
   getDriveFile,
   listChildFolders,
   listDirectItems,
-  findAllFoldersNamed,
   findFoldersByNames,
   resolveToFolder,
-  moveToParent,
   ensureChildFolder,
   createDriveFolder,
   renameDriveFile,
@@ -81,9 +79,16 @@ function folderStt(name) {
   return m ? parseInt(m[1], 10) : null;
 }
 
-function findFolderByStt(folders, stt) {
-  const prefix = String(stt).padStart(2, '0');
-  return (folders || []).find((f) => new RegExp(`^${prefix}(?:\\s|$)`).test(String(f.name || '').trim()));
+export function findExistingContractFolder(folders, wantedName) {
+  return (folders || []).find((f) => f.name === wantedName) || null;
+}
+
+export function findDirectYearFolder(items, rootId, yearName) {
+  return (items || []).find(
+    (f) => isDriveFolder(f)
+      && driveNamesEqual(f.name, yearName)
+      && (f.parents || []).includes(rootId),
+  ) || null;
 }
 
 export async function loadCache() {
@@ -197,29 +202,13 @@ async function ensureYearFolder(accessToken, nam, cache) {
 
   cache.years = cache.years || {};
   const here = await listDirectItems(accessToken, root.id, 25);
-  const yearHere = here.find((f) => isDriveFolder(f) && driveNamesEqual(f.name, yearName));
+  const yearHere = findDirectYearFolder(here, root.id, yearName);
   if (yearHere) {
     cache.years[yearName] = { id: yearHere.id, parentId: root.id };
     cache.rootId = root.id;
     await saveCache(cache);
     console.log('Drive year folder in Phạm Gia:', yearHere.id);
     return yearHere;
-  }
-
-  const named = await findAllFoldersNamed(accessToken, yearName, 50);
-  if (named.length) {
-    const underRoot = named.filter((f) => (f.parents || []).includes(root.id));
-    const oldest = [...named].sort((a, b) =>
-      String(a.createdTime || '').localeCompare(String(b.createdTime || '')),
-    )[0];
-    let yearFolder = underRoot[0] || oldest;
-    const moved = await moveToParent(accessToken, yearFolder.id, root.id);
-    if (isDriveFolder(moved)) yearFolder = moved;
-    cache.years[yearName] = { id: yearFolder.id, parentId: root.id };
-    cache.rootId = root.id;
-    await saveCache(cache);
-    console.log('Drive year folder moved/reused:', { yearId: yearFolder.id, found: named.length });
-    return yearFolder;
   }
 
   const yearFolder = await createDriveFolder(accessToken, yearName, root.id);
@@ -379,9 +368,7 @@ export async function ensureHopDongDriveFolders({ userId, hopDong, tenKhachHang,
       contractFolder = await createDriveFolder(accessToken, wantedName, hopDongRoot.id);
       created = true;
     } else {
-      const exact = (siblings || []).find((f) => f.name === wantedName);
-      const existingByStt = customName ? null : findFolderByStt(siblings, stt);
-      contractFolder = exact || existingByStt;
+      contractFolder = findExistingContractFolder(siblings, wantedName);
       if (!contractFolder) {
         contractFolder = await ensureChildFolder(accessToken, hopDongRoot.id, wantedName, { fallbackRoot: false });
         created = !!contractFolder.created;
