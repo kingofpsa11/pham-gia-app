@@ -10,7 +10,6 @@ import {
   findAllFoldersNamed,
   findFoldersByNames,
   resolveToFolder,
-  moveToParent,
   ensureChildFolder,
   createDriveFolder,
   renameDriveFile,
@@ -79,11 +78,6 @@ export function buildTenFolderHopDong(soHopDong, tenKhachHang, tenDuAn, sttOverr
 function folderStt(name) {
   const m = String(name || '').trim().match(/^(\d{1,4})(?:\s|$)/);
   return m ? parseInt(m[1], 10) : null;
-}
-
-function findFolderByStt(folders, stt) {
-  const prefix = String(stt).padStart(2, '0');
-  return (folders || []).find((f) => new RegExp(`^${prefix}(?:\\s|$)`).test(String(f.name || '').trim()));
 }
 
 export async function loadCache() {
@@ -209,17 +203,13 @@ async function ensureYearFolder(accessToken, nam, cache) {
   const named = await findAllFoldersNamed(accessToken, yearName, 50);
   if (named.length) {
     const underRoot = named.filter((f) => (f.parents || []).includes(root.id));
-    const oldest = [...named].sort((a, b) =>
-      String(a.createdTime || '').localeCompare(String(b.createdTime || '')),
-    )[0];
-    let yearFolder = underRoot[0] || oldest;
-    const moved = await moveToParent(accessToken, yearFolder.id, root.id);
-    if (isDriveFolder(moved)) yearFolder = moved;
-    cache.years[yearName] = { id: yearFolder.id, parentId: root.id };
-    cache.rootId = root.id;
-    await saveCache(cache);
-    console.log('Drive year folder moved/reused:', { yearId: yearFolder.id, found: named.length });
-    return yearFolder;
+    if (underRoot.length) {
+      cache.years[yearName] = { id: underRoot[0].id, parentId: root.id };
+      cache.rootId = root.id;
+      await saveCache(cache);
+      console.log('Drive year folder reused in Phạm Gia:', { yearId: underRoot[0].id, found: named.length });
+      return underRoot[0];
+    }
   }
 
   const yearFolder = await createDriveFolder(accessToken, yearName, root.id);
@@ -380,8 +370,7 @@ export async function ensureHopDongDriveFolders({ userId, hopDong, tenKhachHang,
       created = true;
     } else {
       const exact = (siblings || []).find((f) => f.name === wantedName);
-      const existingByStt = customName ? null : findFolderByStt(siblings, stt);
-      contractFolder = exact || existingByStt;
+      contractFolder = exact;
       if (!contractFolder) {
         contractFolder = await ensureChildFolder(accessToken, hopDongRoot.id, wantedName, { fallbackRoot: false });
         created = !!contractFolder.created;
