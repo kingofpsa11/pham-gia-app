@@ -2,12 +2,34 @@ import { Router } from 'express';
 import { query, queryOne } from '../db.js';
 import { dbErrorResponse } from '../utils/errors.js';
 import { parsePaging, sqlLimitOffset } from '../utils/pagination.js';
-import { parseNgayGiaoDich, parseNgayHachToan } from '../utils/dongTienDate.js';
+import {
+  parseNgayGiaoDich,
+  parseNgayGiaoDichPreserveExistingTime,
+  parseNgayHachToan,
+} from '../utils/dongTienDate.js';
+import { hasPatchField, nullableText, nullableValue, patchedValue } from '../utils/patchMerge.js';
 
 const router = Router();
 
 function insertId(result) {
   return Number(result?.insertId ?? result?.[0]?.insertId);
+}
+
+function mergedDongTienValue(patch, existing, field, normalize = (value) => value) {
+  return patchedValue(patch, existing, field, normalize);
+}
+
+function mergedDongTienDates(patch, existing) {
+  if (!hasPatchField(patch, 'ngay_giao_dich')) {
+    return {
+      ngayGD: existing.ngay_giao_dich,
+      ngayHT: existing.ngay_hach_toan,
+    };
+  }
+  return {
+    ngayGD: parseNgayGiaoDichPreserveExistingTime(patch.ngay_giao_dich, existing.ngay_giao_dich),
+    ngayHT: parseNgayHachToan(patch.ngay_giao_dich),
+  };
 }
 
 const LIST_SELECT = `
@@ -224,16 +246,16 @@ router.post('/dong-tien-moi/bulk-update', async (req, res) => {
       const item = items[i] || {};
       const excelRow = item._excelRow || i + 2;
       try {
-        const ngayGD = parseNgayGiaoDich(item.ngay_giao_dich);
-        const ngayHT = parseNgayHachToan(item.ngay_giao_dich);
-        const soTien = Number(item.so_tien) || 0;
-        if (!item.loai_giao_dich || !item.tai_khoan_tien_id || soTien <= 0) {
-          throw new Error('Thiếu loại GD, tài khoản hoặc số tiền');
-        }
-
         if (item.id) {
-          const exists = await queryOne('SELECT id FROM dong_tien_moi WHERE id = ?', [item.id]);
-          if (!exists) throw new Error(`Không tìm thấy ID ${item.id}`);
+          const existing = await queryOne('SELECT * FROM dong_tien_moi WHERE id = ?', [item.id]);
+          if (!existing) throw new Error(`Không tìm thấy ID ${item.id}`);
+          const { ngayGD, ngayHT } = mergedDongTienDates(item, existing);
+          const soTien = Number(mergedDongTienValue(item, existing, 'so_tien')) || 0;
+          const loaiGiaoDich = mergedDongTienValue(item, existing, 'loai_giao_dich');
+          const taiKhoanTienId = mergedDongTienValue(item, existing, 'tai_khoan_tien_id');
+          if (!loaiGiaoDich || !taiKhoanTienId || soTien <= 0) {
+            throw new Error('Thiếu loại GD, tài khoản hoặc số tiền');
+          }
 
           await query(
             `UPDATE dong_tien_moi SET
@@ -245,28 +267,35 @@ router.post('/dong-tien-moi/bulk-update', async (req, res) => {
             [
               ngayGD,
               ngayHT,
-              item.loai_giao_dich,
-              item.chieu_tien || null,
-              item.tai_khoan_tien_id,
-              item.tai_khoan_nhan_id || null,
+              loaiGiaoDich,
+              mergedDongTienValue(item, existing, 'chieu_tien', nullableText),
+              taiKhoanTienId,
+              mergedDongTienValue(item, existing, 'tai_khoan_nhan_id', nullableText),
               soTien,
-              item.hang_muc_thu_chi_id || null,
-              item.mo_ta_giao_dich || null,
-              item.khach_hang_id || null,
-              item.nha_cung_cap_id || null,
-              item.hop_dong_id || null,
-              item.hop_dong_mua_id || null,
-              item.so_tai_khoan_doi_ung || null,
-              item.ten_tai_khoan_doi_ung || null,
-              item.so_du_sau_giao_dich ?? null,
-              item.ma_giao_dich_ngan_hang || null,
-              item.ghi_chu || null,
-              item.trang_thai || 'hoan_thanh',
+              mergedDongTienValue(item, existing, 'hang_muc_thu_chi_id', nullableText),
+              mergedDongTienValue(item, existing, 'mo_ta_giao_dich', nullableText),
+              mergedDongTienValue(item, existing, 'khach_hang_id', nullableText),
+              mergedDongTienValue(item, existing, 'nha_cung_cap_id', nullableText),
+              mergedDongTienValue(item, existing, 'hop_dong_id', nullableText),
+              mergedDongTienValue(item, existing, 'hop_dong_mua_id', nullableText),
+              mergedDongTienValue(item, existing, 'so_tai_khoan_doi_ung', nullableText),
+              mergedDongTienValue(item, existing, 'ten_tai_khoan_doi_ung', nullableText),
+              mergedDongTienValue(item, existing, 'so_du_sau_giao_dich', nullableValue),
+              mergedDongTienValue(item, existing, 'ma_giao_dich_ngan_hang', nullableText),
+              mergedDongTienValue(item, existing, 'ghi_chu', nullableText),
+              mergedDongTienValue(item, existing, 'trang_thai') || 'hoan_thanh',
               item.id,
             ]
           );
           updated++;
         } else {
+          const ngayGD = parseNgayGiaoDich(item.ngay_giao_dich);
+          const ngayHT = parseNgayHachToan(item.ngay_giao_dich);
+          const soTien = Number(item.so_tien) || 0;
+          if (!item.loai_giao_dich || !item.tai_khoan_tien_id || soTien <= 0) {
+            throw new Error('Thiếu loại GD, tài khoản hoặc số tiền');
+          }
+
           const now = new Date();
           const maGD = `GD${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}${String(now.getTime()).slice(-6)}${i}`;
           await query(
@@ -314,31 +343,36 @@ router.put('/dong-tien-moi/:id', async (req, res) => {
   try {
     const id = req.params.id;
     const body = req.body || {};
-    const ngayGD = parseNgayGiaoDich(body.ngay_giao_dich);
-    const ngayHT = parseNgayHachToan(body.ngay_giao_dich);
+    const existing = await queryOne('SELECT * FROM dong_tien_moi WHERE id = ?', [id]);
+    if (!existing) return res.status(404).json({ error: 'Not found' });
+
+    const { ngayGD, ngayHT } = mergedDongTienDates(body, existing);
+    const soTien = Number(mergedDongTienValue(body, existing, 'so_tien')) || 0;
+    const loaiGiaoDich = mergedDongTienValue(body, existing, 'loai_giao_dich');
+    const taiKhoanTienId = mergedDongTienValue(body, existing, 'tai_khoan_tien_id');
     await query(
       `UPDATE dong_tien_moi SET ngay_giao_dich=?, ngay_hach_toan=?, loai_giao_dich=?, chieu_tien=?, tai_khoan_tien_id=?, tai_khoan_nhan_id=?, so_tien=?, doi_tuong_id=?, khach_hang_id=?, nha_cung_cap_id=?, hop_dong_id=?, hop_dong_mua_id=?, hang_muc_thu_chi_id=?, mo_ta_giao_dich=?, so_tai_khoan_doi_ung=?, ten_tai_khoan_doi_ung=?, so_du_sau_giao_dich=?, ma_giao_dich_ngan_hang=?, ghi_chu=?, trang_thai=? WHERE id=?`,
       [
         ngayGD,
         ngayHT,
-        body.loai_giao_dich,
-        body.chieu_tien || null,
-        body.tai_khoan_tien_id,
-        body.tai_khoan_nhan_id || null,
-        Number(body.so_tien) || 0,
-        body.doi_tuong_id || null,
-        body.khach_hang_id || null,
-        body.nha_cung_cap_id || null,
-        body.hop_dong_id || null,
-        body.hop_dong_mua_id || null,
-        body.hang_muc_thu_chi_id || null,
-        body.mo_ta_giao_dich || null,
-        body.so_tai_khoan_doi_ung || null,
-        body.ten_tai_khoan_doi_ung || null,
-        body.so_du_sau_giao_dich ?? null,
-        body.ma_giao_dich_ngan_hang ?? null,
-        body.ghi_chu || null,
-        body.trang_thai || 'hoan_thanh',
+        loaiGiaoDich,
+        mergedDongTienValue(body, existing, 'chieu_tien', nullableText),
+        taiKhoanTienId,
+        mergedDongTienValue(body, existing, 'tai_khoan_nhan_id', nullableText),
+        soTien,
+        mergedDongTienValue(body, existing, 'doi_tuong_id', nullableText),
+        mergedDongTienValue(body, existing, 'khach_hang_id', nullableText),
+        mergedDongTienValue(body, existing, 'nha_cung_cap_id', nullableText),
+        mergedDongTienValue(body, existing, 'hop_dong_id', nullableText),
+        mergedDongTienValue(body, existing, 'hop_dong_mua_id', nullableText),
+        mergedDongTienValue(body, existing, 'hang_muc_thu_chi_id', nullableText),
+        mergedDongTienValue(body, existing, 'mo_ta_giao_dich', nullableText),
+        mergedDongTienValue(body, existing, 'so_tai_khoan_doi_ung', nullableText),
+        mergedDongTienValue(body, existing, 'ten_tai_khoan_doi_ung', nullableText),
+        mergedDongTienValue(body, existing, 'so_du_sau_giao_dich', nullableValue),
+        mergedDongTienValue(body, existing, 'ma_giao_dich_ngan_hang', nullableValue),
+        mergedDongTienValue(body, existing, 'ghi_chu', nullableText),
+        mergedDongTienValue(body, existing, 'trang_thai') || 'hoan_thanh',
         id,
       ]
     );
