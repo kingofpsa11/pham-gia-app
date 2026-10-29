@@ -81,11 +81,6 @@ function folderStt(name) {
   return m ? parseInt(m[1], 10) : null;
 }
 
-function findFolderByStt(folders, stt) {
-  const prefix = String(stt).padStart(2, '0');
-  return (folders || []).find((f) => new RegExp(`^${prefix}(?:\\s|$)`).test(String(f.name || '').trim()));
-}
-
 export async function loadCache() {
   try {
     const row = await queryOne('SELECT value FROM cau_hinh WHERE `key` = ?', [CACHE_KEY]);
@@ -380,8 +375,7 @@ export async function ensureHopDongDriveFolders({ userId, hopDong, tenKhachHang,
       created = true;
     } else {
       const exact = (siblings || []).find((f) => f.name === wantedName);
-      const existingByStt = customName ? null : findFolderByStt(siblings, stt);
-      contractFolder = exact || existingByStt;
+      contractFolder = exact;
       if (!contractFolder) {
         contractFolder = await ensureChildFolder(accessToken, hopDongRoot.id, wantedName, { fallbackRoot: false });
         created = !!contractFolder.created;
