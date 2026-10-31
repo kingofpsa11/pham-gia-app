@@ -61,4 +61,3 @@ test('contract Drive folders are not reused by STT-only matches', async () => {
   assert.doesNotMatch(source, /findFolderByStt\(siblings, stt\)/);
   assert.match(source, /contractFolder = exact;/);
 });
-
