@@ -14,4 +14,3 @@ export function nullableText(value) {
 export function nullableValue(value) {
   return value ?? null;
 }
-
