@@ -3,11 +3,62 @@ import { query, queryOne } from '../db.js';
 import { dbErrorResponse } from '../utils/errors.js';
 import { parsePaging, sqlLimitOffset } from '../utils/pagination.js';
 import { parseNgayGiaoDich, parseNgayHachToan } from '../utils/dongTienDate.js';
+import { hasOwn, mergeOmittedFields, nullable } from '../utils/patchMerge.js';
 
 const router = Router();
 
 function insertId(result) {
   return Number(result?.insertId ?? result?.[0]?.insertId);
+}
+
+const DONG_TIEN_UPDATE_FIELDS = [
+  'ngay_giao_dich',
+  'loai_giao_dich',
+  'chieu_tien',
+  'tai_khoan_tien_id',
+  'tai_khoan_nhan_id',
+  'so_tien',
+  'doi_tuong_id',
+  'khach_hang_id',
+  'nha_cung_cap_id',
+  'hop_dong_id',
+  'hop_dong_mua_id',
+  'hang_muc_thu_chi_id',
+  'mo_ta_giao_dich',
+  'so_tai_khoan_doi_ung',
+  'ten_tai_khoan_doi_ung',
+  'so_du_sau_giao_dich',
+  'ma_giao_dich_ngan_hang',
+  'ghi_chu',
+  'trang_thai',
+];
+
+function hasExplicitTime(value) {
+  return /\d{1,2}:\d{2}(?::\d{2})?/.test(String(value || ''));
+}
+
+function existingTime(value) {
+  return String(value || '').match(/[ T](\d{2}:\d{2}:\d{2})/)?.[1] || '';
+}
+
+function resolveNgayGiaoDich(existing, body) {
+  const raw = hasOwn(body, 'ngay_giao_dich') ? body.ngay_giao_dich : existing.ngay_giao_dich;
+  if (hasOwn(body, 'ngay_giao_dich') && !hasExplicitTime(raw)) {
+    const time = existingTime(existing.ngay_giao_dich);
+    if (time && time !== '00:00:00') {
+      return `${parseNgayGiaoDich(raw).slice(0, 10)} ${time}`;
+    }
+  }
+  return raw;
+}
+
+export function buildDongTienUpdatePayload(existing, body = {}) {
+  const merged = mergeOmittedFields(existing, body, DONG_TIEN_UPDATE_FIELDS);
+  merged.ngay_giao_dich = parseNgayGiaoDich(resolveNgayGiaoDich(existing, body));
+  merged.ngay_hach_toan = parseNgayHachToan(merged.ngay_giao_dich);
+  merged.so_tien = Number(merged.so_tien) || 0;
+  merged.trang_thai = merged.trang_thai || 'hoan_thanh';
+  return merged;
 }
 
 const LIST_SELECT = `
@@ -224,49 +275,54 @@ router.post('/dong-tien-moi/bulk-update', async (req, res) => {
       const item = items[i] || {};
       const excelRow = item._excelRow || i + 2;
       try {
-        const ngayGD = parseNgayGiaoDich(item.ngay_giao_dich);
-        const ngayHT = parseNgayHachToan(item.ngay_giao_dich);
-        const soTien = Number(item.so_tien) || 0;
-        if (!item.loai_giao_dich || !item.tai_khoan_tien_id || soTien <= 0) {
-          throw new Error('Thiếu loại GD, tài khoản hoặc số tiền');
-        }
-
         if (item.id) {
-          const exists = await queryOne('SELECT id FROM dong_tien_moi WHERE id = ?', [item.id]);
+          const exists = await queryOne('SELECT * FROM dong_tien_moi WHERE id = ?', [item.id]);
           if (!exists) throw new Error(`Không tìm thấy ID ${item.id}`);
+          const payload = buildDongTienUpdatePayload(exists, item);
+          if (!payload.loai_giao_dich || !payload.tai_khoan_tien_id || payload.so_tien <= 0) {
+            throw new Error('Thiếu loại GD, tài khoản hoặc số tiền');
+          }
 
           await query(
             `UPDATE dong_tien_moi SET
               ngay_giao_dich=?, ngay_hach_toan=?, loai_giao_dich=?, chieu_tien=?, tai_khoan_tien_id=?, tai_khoan_nhan_id=?,
-              so_tien=?, hang_muc_thu_chi_id=?, mo_ta_giao_dich=?, khach_hang_id=?, nha_cung_cap_id=?,
+              so_tien=?, doi_tuong_id=?, hang_muc_thu_chi_id=?, mo_ta_giao_dich=?, khach_hang_id=?, nha_cung_cap_id=?,
               hop_dong_id=?, hop_dong_mua_id=?, so_tai_khoan_doi_ung=?, ten_tai_khoan_doi_ung=?,
               so_du_sau_giao_dich=?, ma_giao_dich_ngan_hang=?, ghi_chu=?, trang_thai=?
              WHERE id=?`,
             [
-              ngayGD,
-              ngayHT,
-              item.loai_giao_dich,
-              item.chieu_tien || null,
-              item.tai_khoan_tien_id,
-              item.tai_khoan_nhan_id || null,
-              soTien,
-              item.hang_muc_thu_chi_id || null,
-              item.mo_ta_giao_dich || null,
-              item.khach_hang_id || null,
-              item.nha_cung_cap_id || null,
-              item.hop_dong_id || null,
-              item.hop_dong_mua_id || null,
-              item.so_tai_khoan_doi_ung || null,
-              item.ten_tai_khoan_doi_ung || null,
-              item.so_du_sau_giao_dich ?? null,
-              item.ma_giao_dich_ngan_hang || null,
-              item.ghi_chu || null,
-              item.trang_thai || 'hoan_thanh',
+              payload.ngay_giao_dich,
+              payload.ngay_hach_toan,
+              payload.loai_giao_dich,
+              nullable(payload.chieu_tien),
+              payload.tai_khoan_tien_id,
+              nullable(payload.tai_khoan_nhan_id),
+              payload.so_tien,
+              nullable(payload.doi_tuong_id),
+              nullable(payload.hang_muc_thu_chi_id),
+              nullable(payload.mo_ta_giao_dich),
+              nullable(payload.khach_hang_id),
+              nullable(payload.nha_cung_cap_id),
+              nullable(payload.hop_dong_id),
+              nullable(payload.hop_dong_mua_id),
+              nullable(payload.so_tai_khoan_doi_ung),
+              nullable(payload.ten_tai_khoan_doi_ung),
+              payload.so_du_sau_giao_dich ?? null,
+              nullable(payload.ma_giao_dich_ngan_hang),
+              nullable(payload.ghi_chu),
+              payload.trang_thai,
               item.id,
             ]
           );
           updated++;
         } else {
+          const ngayGD = parseNgayGiaoDich(item.ngay_giao_dich);
+          const ngayHT = parseNgayHachToan(item.ngay_giao_dich);
+          const soTien = Number(item.so_tien) || 0;
+          if (!item.loai_giao_dich || !item.tai_khoan_tien_id || soTien <= 0) {
+            throw new Error('Thiếu loại GD, tài khoản hoặc số tiền');
+          }
+
           const now = new Date();
           const maGD = `GD${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}${String(now.getTime()).slice(-6)}${i}`;
           await query(
@@ -314,31 +370,36 @@ router.put('/dong-tien-moi/:id', async (req, res) => {
   try {
     const id = req.params.id;
     const body = req.body || {};
-    const ngayGD = parseNgayGiaoDich(body.ngay_giao_dich);
-    const ngayHT = parseNgayHachToan(body.ngay_giao_dich);
+    const existing = await queryOne('SELECT * FROM dong_tien_moi WHERE id = ?', [id]);
+    if (!existing) return res.status(404).json({ error: 'Not found' });
+    const payload = buildDongTienUpdatePayload(existing, body);
+    if (!payload.loai_giao_dich || !payload.tai_khoan_tien_id || payload.so_tien <= 0) {
+      return res.status(400).json({ error: 'Thiếu loại GD, tài khoản hoặc số tiền' });
+    }
+
     await query(
       `UPDATE dong_tien_moi SET ngay_giao_dich=?, ngay_hach_toan=?, loai_giao_dich=?, chieu_tien=?, tai_khoan_tien_id=?, tai_khoan_nhan_id=?, so_tien=?, doi_tuong_id=?, khach_hang_id=?, nha_cung_cap_id=?, hop_dong_id=?, hop_dong_mua_id=?, hang_muc_thu_chi_id=?, mo_ta_giao_dich=?, so_tai_khoan_doi_ung=?, ten_tai_khoan_doi_ung=?, so_du_sau_giao_dich=?, ma_giao_dich_ngan_hang=?, ghi_chu=?, trang_thai=? WHERE id=?`,
       [
-        ngayGD,
-        ngayHT,
-        body.loai_giao_dich,
-        body.chieu_tien || null,
-        body.tai_khoan_tien_id,
-        body.tai_khoan_nhan_id || null,
-        Number(body.so_tien) || 0,
-        body.doi_tuong_id || null,
-        body.khach_hang_id || null,
-        body.nha_cung_cap_id || null,
-        body.hop_dong_id || null,
-        body.hop_dong_mua_id || null,
-        body.hang_muc_thu_chi_id || null,
-        body.mo_ta_giao_dich || null,
-        body.so_tai_khoan_doi_ung || null,
-        body.ten_tai_khoan_doi_ung || null,
-        body.so_du_sau_giao_dich ?? null,
-        body.ma_giao_dich_ngan_hang ?? null,
-        body.ghi_chu || null,
-        body.trang_thai || 'hoan_thanh',
+        payload.ngay_giao_dich,
+        payload.ngay_hach_toan,
+        payload.loai_giao_dich,
+        nullable(payload.chieu_tien),
+        payload.tai_khoan_tien_id,
+        nullable(payload.tai_khoan_nhan_id),
+        payload.so_tien,
+        nullable(payload.doi_tuong_id),
+        nullable(payload.khach_hang_id),
+        nullable(payload.nha_cung_cap_id),
+        nullable(payload.hop_dong_id),
+        nullable(payload.hop_dong_mua_id),
+        nullable(payload.hang_muc_thu_chi_id),
+        nullable(payload.mo_ta_giao_dich),
+        nullable(payload.so_tai_khoan_doi_ung),
+        nullable(payload.ten_tai_khoan_doi_ung),
+        payload.so_du_sau_giao_dich ?? null,
+        nullable(payload.ma_giao_dich_ngan_hang),
+        nullable(payload.ghi_chu),
+        payload.trang_thai,
         id,
       ]
     );
