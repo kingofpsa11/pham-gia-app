@@ -7,4 +7,3 @@ export function getJwtSecret() {
   }
   return secret;
 }
-
