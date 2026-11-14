@@ -149,7 +149,7 @@ router.post('/dong-tien-moi', async (req, res) => {
   try {
     const body = req.body || {};
     const ngayGD = parseNgayGiaoDich(body.ngay_giao_dich);
-    const ngayHT = parseNgayHachToan(body.ngay_giao_dich);
+    const ngayHT = parseNgayHachToan(body.ngay_hach_toan || body.ngay_giao_dich);
     const now = new Date();
     const maGD =
       body.ma_giao_dich ||
@@ -225,7 +225,7 @@ router.post('/dong-tien-moi/bulk-update', async (req, res) => {
       const excelRow = item._excelRow || i + 2;
       try {
         const ngayGD = parseNgayGiaoDich(item.ngay_giao_dich);
-        const ngayHT = parseNgayHachToan(item.ngay_giao_dich);
+        const ngayHT = parseNgayHachToan(item.ngay_hach_toan || item.ngay_giao_dich);
         const soTien = Number(item.so_tien) || 0;
         if (!item.loai_giao_dich || !item.tai_khoan_tien_id || soTien <= 0) {
           throw new Error('Thiếu loại GD, tài khoản hoặc số tiền');
@@ -315,7 +315,7 @@ router.put('/dong-tien-moi/:id', async (req, res) => {
     const id = req.params.id;
     const body = req.body || {};
     const ngayGD = parseNgayGiaoDich(body.ngay_giao_dich);
-    const ngayHT = parseNgayHachToan(body.ngay_giao_dich);
+    const ngayHT = parseNgayHachToan(body.ngay_hach_toan || body.ngay_giao_dich);
     await query(
       `UPDATE dong_tien_moi SET ngay_giao_dich=?, ngay_hach_toan=?, loai_giao_dich=?, chieu_tien=?, tai_khoan_tien_id=?, tai_khoan_nhan_id=?, so_tien=?, doi_tuong_id=?, khach_hang_id=?, nha_cung_cap_id=?, hop_dong_id=?, hop_dong_mua_id=?, hang_muc_thu_chi_id=?, mo_ta_giao_dich=?, so_tai_khoan_doi_ung=?, ten_tai_khoan_doi_ung=?, so_du_sau_giao_dich=?, ma_giao_dich_ngan_hang=?, ghi_chu=?, trang_thai=? WHERE id=?`,
       [

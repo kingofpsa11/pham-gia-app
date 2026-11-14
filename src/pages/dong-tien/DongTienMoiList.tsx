@@ -470,6 +470,36 @@ function normalizeImportText(s: string): string {
   return String(s || '').trim().replace(/\s+/g, ' ');
 }
 
+function normalizeImportDateOnly(s: string): string {
+  const raw = normalizeImportText(s);
+  if (!raw) return '';
+  const dmySlash = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (dmySlash) return `${dmySlash[3]}-${dmySlash[2].padStart(2, '0')}-${dmySlash[1].padStart(2, '0')}`;
+  const dmyDash = raw.match(/^(\d{1,2})-(\d{1,2})-(\d{4})/);
+  if (dmyDash) return `${dmyDash[3]}-${dmyDash[2].padStart(2, '0')}-${dmyDash[1].padStart(2, '0')}`;
+  const iso = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
+  return raw;
+}
+
+function normalizeImportDateTime(s: string): string {
+  const raw = normalizeImportText(s);
+  if (!raw) return '';
+  const dmy = raw.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})(?:\s+(\d{2}):(\d{2})(?::(\d{2}))?)?/);
+  const iso = raw.match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?/);
+  const parts = dmy
+    ? { y: dmy[3], m: dmy[2], d: dmy[1], hh: dmy[4], mm: dmy[5], ss: dmy[6] }
+    : iso
+      ? { y: iso[1], m: iso[2], d: iso[3], hh: iso[4], mm: iso[5], ss: iso[6] }
+      : null;
+  if (!parts) return raw;
+  const date = `${parts.y}-${parts.m.padStart(2, '0')}-${parts.d.padStart(2, '0')}`;
+  const time = parts.hh && parts.mm
+    ? `${parts.hh}:${parts.mm}:${parts.ss || '00'}`
+    : '';
+  return time && time !== '00:00:00' ? `${date} ${time}` : date;
+}
+
 function normalizeImportMoney(n: number | string | null | undefined): string {
   return String(Math.round(Number(n) || 0));
 }
@@ -487,8 +517,8 @@ function saoKeImportDupKey(parts: {
   ma_giao_dich_ngan_hang: string;
 }): string {
   return [
-    normalizeImportText(parts.ngay_gd),
-    normalizeImportText(parts.ngay_gt),
+    normalizeImportDateTime(parts.ngay_gd),
+    normalizeImportDateOnly(parts.ngay_gt),
     normalizeImportText(parts.dien_giai),
     normalizeImportMoney(parts.ghi_no),
     normalizeImportMoney(parts.ghi_co),
@@ -511,7 +541,10 @@ function bankGhiNoCoFromRecord(d: DongTienMoi): { ghi_no: number; ghi_co: number
 }
 
 function importRowDupKey(row: ExcelRow): string {
-  return saoKeImportDupKey(row);
+  return saoKeImportDupKey({
+    ...row,
+    ngay_gt: row.ngay_gt || row.ngay_gd,
+  });
 }
 
 function existingRecordDupKey(d: DongTienMoi): string {
@@ -1220,7 +1253,7 @@ export default function DongTienMoiList() {
           loai_giao_dich: loaiGD,
           chieu_tien: chieuTien,
           ngay_giao_dich: row.ngay_gd,
-          ngay_hach_toan: row.ngay_gt || null,
+          ngay_hach_toan: row.ngay_gt || row.ngay_gd,
           tai_khoan_tien_id: Number(importTaiKhoanId),
           tai_khoan_nhan_id: counterpart?.id ?? null,
           so_tien: soTien,
@@ -1266,6 +1299,32 @@ export default function DongTienMoiList() {
     return excelRows.filter(r => r.valid && selectedImportStts.has(r.stt));
   }
 
+  async function fetchExistingImportKeys(params: {
+    tai_khoan_tien_id: string;
+    date_from: string;
+    date_to: string;
+  }): Promise<Set<string>> {
+    const keys = new Set<string>();
+    const limit = 5000;
+    let page = 1;
+    let fetched = 0;
+
+    while (true) {
+      const existing = await dongTienMoiApi.list({
+        ...params,
+        page,
+        limit,
+      });
+      const rows = ((existing.data || []) as DongTienMoi[]);
+      for (const row of rows) keys.add(existingRecordDupKey(row));
+      fetched += rows.length;
+      if (rows.length === 0 || rows.length < limit || fetched >= (Number(existing.total) || 0)) break;
+      page += 1;
+    }
+
+    return keys;
+  }
+
   async function handleImportExcel() {
     if (!importTaiKhoanId) { addToast('warning', 'Vui lòng chọn tài khoản'); return; }
     if (selectedImportStts.size === 0) {
@@ -1277,15 +1336,11 @@ export default function DongTienMoiList() {
     setImporting(true);
     try {
       const dates = validRows.map(r => r.ngay_iso).filter(Boolean).sort();
-      const existing = await dongTienMoiApi.list({
+      const existingKeys = await fetchExistingImportKeys({
         tai_khoan_tien_id: importTaiKhoanId,
         date_from: dates[0],
         date_to: dates[dates.length - 1],
-        limit: 9999,
       });
-      const existingKeys = new Set(
-        ((existing.data || []) as DongTienMoi[]).map(existingRecordDupKey),
-      );
       importExistingKeysRef.current = existingKeys;
 
       const duplicates = findImportDuplicates(validRows, existingKeys);
