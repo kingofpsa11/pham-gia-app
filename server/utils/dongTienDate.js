@@ -35,6 +35,15 @@ function parseWallClockParts(d, m, y, h, mi, se) {
   );
 }
 
+function inputHasExplicitTime(raw) {
+  return /\d{1,2}:\d{2}(?::\d{2})?/.test(String(raw || ''));
+}
+
+function timePart(raw) {
+  const match = String(raw || '').match(/[ T](\d{2}:\d{2}:\d{2})/);
+  return match?.[1] || '';
+}
+
 /** yyyy-mm-dd HH:mm:ss trong DB → dd/mm/yyyy [HH:mm:ss] (không đổi múi giờ). */
 export function formatNgayGiaoDichUtcToVn(raw) {
   const s = String(raw || '').trim();
@@ -85,4 +94,12 @@ export function parseNgayGiaoDich(raw) {
   }
 
   return nowWallClockString();
+}
+
+export function parseNgayGiaoDichPreserveExistingTime(raw, existingRaw) {
+  const parsed = parseNgayGiaoDich(raw);
+  if (inputHasExplicitTime(raw)) return parsed;
+  const existingTime = timePart(existingRaw);
+  if (!existingTime || existingTime === '00:00:00') return parsed;
+  return `${parsed.slice(0, 10)} ${existingTime}`;
 }
