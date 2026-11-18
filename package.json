@@ -11,6 +11,7 @@
     "reset-admin-password": "node server/scripts/reset-admin-password.js",
     "build": "vite build",
     "lint": "eslint .",
+    "test": "node --test server/*.test.js",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.app.json"
   },

@@ -217,11 +217,12 @@ function driveEscape(value) {
   return String(value || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 }
 
-export async function driveApi(accessToken, path, { method = 'GET', query: qs, body, apiVersion = 'v3' } = {}) {
+export async function driveApi(accessToken, path, { method = 'GET', query, qs, body, apiVersion = 'v3' } = {}) {
   const version = apiVersion === 'v2' ? 'v2' : 'v3';
   const url = new URL(`https://www.googleapis.com/drive/${version}/${path.replace(/^\//, '')}`);
-  if (qs) {
-    for (const [k, v] of Object.entries(qs)) {
+  const params = qs ?? query;
+  if (params) {
+    for (const [k, v] of Object.entries(params)) {
       if (v != null && v !== '') url.searchParams.set(k, String(v));
     }
   }
