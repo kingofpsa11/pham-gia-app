@@ -1,6 +1,7 @@
 import jwt from 'jsonwebtoken';
+import { getJwtSecret } from '../utils/jwtSecret.js';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'phamgia_jwt_secret_change_this_2026';
+const JWT_SECRET = getJwtSecret();
 
 export function verifyToken(token) {
   if (!token) return null;

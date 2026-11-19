@@ -10,9 +10,10 @@ import {
   getDriveTokenRow,
   deleteDriveTokens,
 } from '../utils/googleDrive.js';
+import { getJwtSecret } from '../utils/jwtSecret.js';
 
 const router = Router();
-const JWT_SECRET = process.env.JWT_SECRET || 'phamgia_jwt_secret_change_this_2026';
+const JWT_SECRET = getJwtSecret();
 
 function buildState(userId, redirect, appOrigin) {
   return jwt.sign(
