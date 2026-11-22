@@ -12,6 +12,7 @@ const {
   mergeOmittedFields,
   preserveExistingTimeIfDateOnly,
 } = await import('./utils/patchMerge.js');
+const { findExactContractFolder } = await import('./utils/hopDongDrive.js');
 
 let server;
 let baseUrl;
@@ -106,4 +107,14 @@ test('date-only edits keep the original transaction time', () => {
     ),
     '2026-11-21 09:15:00',
   );
+});
+
+test('contract Drive folders are only reused on an exact name match', () => {
+  const folders = [
+    { id: 'other-contract', name: '01 Other Customer - Other Project' },
+    { id: 'wanted', name: '02 ACME - New Factory' },
+  ];
+
+  assert.equal(findExactContractFolder(folders, '02 ACME - New Factory')?.id, 'wanted');
+  assert.equal(findExactContractFolder(folders, '01 ACME - New Factory'), null);
 });
