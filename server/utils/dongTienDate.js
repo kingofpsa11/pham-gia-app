@@ -86,3 +86,20 @@ export function parseNgayGiaoDich(raw) {
 
   return nowWallClockString();
 }
+
+function extractTime(raw) {
+  const m = String(raw || '').match(/[ T](\d{2}:\d{2}:\d{2})/);
+  return m?.[1] || '';
+}
+
+export function parseNgayGiaoDichForUpdate(raw, previousRaw) {
+  const s = String(raw || '').trim();
+  if (!s) return previousRaw || nowWallClockString();
+
+  const dateOnly = /^(\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}\/\d{4}|\d{1,2}-\d{1,2}-\d{4})$/.test(s);
+  const previousTime = extractTime(previousRaw);
+  if (dateOnly && previousTime) {
+    return parseNgayGiaoDich(`${s} ${previousTime}`);
+  }
+  return parseNgayGiaoDich(raw);
+}
