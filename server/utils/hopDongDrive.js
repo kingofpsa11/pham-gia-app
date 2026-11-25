@@ -380,8 +380,7 @@ export async function ensureHopDongDriveFolders({ userId, hopDong, tenKhachHang,
       created = true;
     } else {
       const exact = (siblings || []).find((f) => f.name === wantedName);
-      const existingByStt = customName ? null : findFolderByStt(siblings, stt);
-      contractFolder = exact || existingByStt;
+      contractFolder = exact;
       if (!contractFolder) {
         contractFolder = await ensureChildFolder(accessToken, hopDongRoot.id, wantedName, { fallbackRoot: false });
         created = !!contractFolder.created;
