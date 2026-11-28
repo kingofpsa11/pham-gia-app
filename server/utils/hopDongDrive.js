@@ -81,9 +81,8 @@ function folderStt(name) {
   return m ? parseInt(m[1], 10) : null;
 }
 
-function findFolderByStt(folders, stt) {
-  const prefix = String(stt).padStart(2, '0');
-  return (folders || []).find((f) => new RegExp(`^${prefix}(?:\\s|$)`).test(String(f.name || '').trim()));
+export function findReusableContractFolder(folders, wantedName) {
+  return (folders || []).find((f) => driveNamesEqual(f.name, wantedName)) || null;
 }
 
 export async function loadCache() {
@@ -379,9 +378,7 @@ export async function ensureHopDongDriveFolders({ userId, hopDong, tenKhachHang,
       contractFolder = await createDriveFolder(accessToken, wantedName, hopDongRoot.id);
       created = true;
     } else {
-      const exact = (siblings || []).find((f) => f.name === wantedName);
-      const existingByStt = customName ? null : findFolderByStt(siblings, stt);
-      contractFolder = exact || existingByStt;
+      contractFolder = findReusableContractFolder(siblings, wantedName);
       if (!contractFolder) {
         contractFolder = await ensureChildFolder(accessToken, hopDongRoot.id, wantedName, { fallbackRoot: false });
         created = !!contractFolder.created;
